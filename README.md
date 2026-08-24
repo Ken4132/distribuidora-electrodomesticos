@@ -131,7 +131,8 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Recorre la interfaz como una persona y deja capturas en `frontend/tests/shots/`.
+Recorre la interfaz como una persona (24 verificaciones) y deja capturas en
+`frontend/tests/shots/`.
 
 ---
 
@@ -340,6 +341,7 @@ genera un `JWT_SECRET` propio y no reutilices las credenciales de ejemplo.
 | La página carga pero todo falla con error de conexión | El backend no está levantado, o `VITE_API_TARGET` no coincide con el `PORT` del backend. |
 | El puerto 4000 o 5173 está ocupado | Cambia `PORT` en `backend/.env` y `VITE_API_TARGET` / `VITE_PORT` en `frontend/.env`. |
 | Las fechas salen un día corridas | Revisa `APP_TIMEZONE`. Al cambiarla hay que actualizar también `app_today()` con una migración. |
+| `Demasiados intentos. Espera unos minutos.` | Protección contra fuerza bruta: 10 intentos de login cada 10 minutos. Espera, o reinicia el backend (el contador vive en memoria). Aparece sobre todo al repetir la prueba de navegador varias veces seguidas. |
 
 ---
 
