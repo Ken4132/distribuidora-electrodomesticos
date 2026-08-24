@@ -4,25 +4,21 @@ import { customersApi, productsApi, salesApi } from '../services/api.js';
 import { useDebounce } from '../hooks/useDebounce.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { Field } from '../components/ui.jsx';
+import { usePaymentModes, unitPriceFor } from '../hooks/usePaymentModes.js';
 import { formatDate, money, todayIso } from '../utils/format.js';
 
-const MODES = [
-    { key: 'contado', label: 'Contado', hint: 'Costo +30% · 1 pago' },
-    { key: 'credito_4', label: 'Crédito 4 pagos', hint: 'Costo +50% · 4 cuotas mensuales' },
-    { key: 'credito_8', label: 'Crédito 8 pagos', hint: 'Costo +70% · 8 cuotas mensuales' },
-];
-
-const PRICE_FIELD = {
-    contado: 'price_cash',
-    credito_4: 'price_credit_4',
-    credito_8: 'price_credit_8',
-};
+/** Descripción de la modalidad construida con las reglas que envía el backend. */
+function modeHint(m) {
+    const cuotas = m.installments === 1 ? '1 pago' : `${m.installments} cuotas mensuales`;
+    return `Costo +${m.markup_percent}% · ${cuotas}`;
+}
 
 export default function NewSale() {
     const toast = useToast();
     const navigate = useNavigate();
     const [params] = useSearchParams();
 
+    const { modes } = usePaymentModes();
     const [customer, setCustomer] = useState(null);
     const [mode, setMode] = useState('contado');
     const [saleDate, setSaleDate] = useState(todayIso());
@@ -41,6 +37,8 @@ export default function NewSale() {
             .then((r) => setCustomer(r.data))
             .catch(() => {});
     }, [params]);
+
+    const currentMode = modes.find((m) => m.key === mode) ?? null;
 
     const items = useMemo(
         () => lines.map((l) => ({ product_id: l.product.id, quantity: l.quantity })),
@@ -151,7 +149,7 @@ export default function NewSale() {
 
                     <section className="panel">
                         <h2 className="panel__title">2. Productos</h2>
-                        <ProductPicker onPick={addProduct} mode={mode} />
+                        <ProductPicker onPick={addProduct} mode={currentMode} />
 
                         {lines.length > 0 && (
                             <div className="table-wrap sale-items">
@@ -167,7 +165,7 @@ export default function NewSale() {
                                     </thead>
                                     <tbody>
                                         {lines.map((l) => {
-                                            const unit = Number(l.product[PRICE_FIELD[mode]]);
+                                            const unit = unitPriceFor(l.product, currentMode);
                                             const insufficient = l.quantity > l.product.stock;
                                             return (
                                                 <tr key={l.product.id} className={insufficient ? 'row--error' : ''}>
@@ -212,7 +210,7 @@ export default function NewSale() {
                     <section className="panel">
                         <h2 className="panel__title">3. Modalidad de pago</h2>
                         <div className="modes">
-                            {MODES.map((m) => (
+                            {modes.map((m) => (
                                 <button
                                     key={m.key}
                                     type="button"
@@ -220,7 +218,7 @@ export default function NewSale() {
                                     onClick={() => setMode(m.key)}
                                 >
                                     <strong>{m.label}</strong>
-                                    <span>{m.hint}</span>
+                                    <span>{modeHint(m)}</span>
                                 </button>
                             ))}
                         </div>
@@ -399,7 +397,7 @@ function ProductPicker({ onPick, mode }) {
                                     <span className="mono">{p.code}</span> {p.name}
                                 </strong>
                                 <span className="muted">
-                                    {money(p[PRICE_FIELD[mode]])} · stock {p.stock}
+                                    {money(unitPriceFor(p, currentMode))} · stock {p.stock}
                                     {p.stock <= 0 ? ' (sin existencias)' : ''}
                                 </span>
                             </button>

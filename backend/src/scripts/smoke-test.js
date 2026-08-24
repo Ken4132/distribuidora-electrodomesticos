@@ -272,8 +272,133 @@ async function main() {
     check('No se puede desactivar un cliente con saldo pendiente (409)', blocked.status === 409,
         `recibido ${blocked.status}`);
 
+    // ------------------------------- CONSISTENCIA DE LA REGLA ENTRE CAPAS
+    // Si algún día alguien cambia el porcentaje en un solo sitio, esta
+    // sección falla. Es la red de seguridad de la regla comercial.
+    console.log('\n[8] Consistencia de la regla de precios entre capas');
+    const modesRes = await api('GET', '/sales/payment-modes');
+    const modes = modesRes.body?.data ?? [];
+    check('La API publica las 3 modalidades', modes.length === 3, JSON.stringify(modes));
+
+    const expectedRules = { contado: [0.3, 1], credito_4: [0.5, 4], credito_8: [0.7, 8] };
+    for (const m of modes) {
+        const [markup, cuotas] = expectedRules[m.key] ?? [];
+        check(`API: ${m.key} declara +${Math.round(markup * 100)}% y ${cuotas} cuota(s)`,
+            m.markup === markup && m.installments === cuotas,
+            `= +${m.markup_percent}% / ${m.installments}`);
+    }
+
+    const ruleProduct = await api('POST', '/products', {
+        code: `${code}-RULE`, name: 'Producto verificación de regla', cost: 777.77, stock: 30,
+    });
+    const rp = ruleProduct.body?.data ?? {};
+    for (const m of modes) {
+        const expected = q(Math.round(777.77 * (1 + m.markup) * 100) / 100);
+        check(`BD: precio ${m.key} de un costo Q777.77 = Q${expected}`,
+            q(rp[m.price_field]) === expected, `= ${rp[m.price_field]}`);
+    }
+    const ruleProductId = rp.id;
+
+    // El precio que se aplica realmente en la venta debe ser el mismo
+    for (const m of modes) {
+        const quoted = await api('POST', '/sales/quote', {
+            payment_mode: m.key, items: [{ product_id: ruleProductId, quantity: 1 }],
+        });
+        check(`Venta: la cotización ${m.key} usa el precio de la BD`,
+            q(quoted.body?.data?.total) === q(rp[m.price_field]),
+            `${quoted.body?.data?.total} vs ${rp[m.price_field]}`);
+        check(`Venta: la cotización ${m.key} genera ${m.installments} cuota(s)`,
+            quoted.body?.data?.installments?.length === m.installments);
+        check(`Venta: la suma de las cuotas ${m.key} es exactamente el total`,
+            q(quoted.body?.data?.installments?.reduce((a, i) => a + Number(i.amount), 0)) ===
+                q(quoted.body?.data?.total));
+    }
+
+    // ---------------------------------------------- REGLAS DE FECHAS Y PAGOS
+    console.log('\n[9] Reglas de vencimiento y comportamiento de pagos');
+
+    // Venta el 31 de enero: los meses cortos no deben desplazar el calendario
+    const janSale = await api('POST', '/sales', {
+        customer_id: customerId, payment_mode: 'credito_4', sale_date: '2026-01-31',
+        items: [{ product_id: ruleProductId, quantity: 1 }],
+    });
+    const janDues = janSale.body?.data?.installments?.map((i) => i.due_date) ?? [];
+    check('Venta del 31-ene: vencimientos 28/02, 31/03, 30/04, 31/05',
+        JSON.stringify(janDues) === JSON.stringify(['2026-02-28', '2026-03-31', '2026-04-30', '2026-05-31']),
+        janDues.join(' '));
+    check('El día de vencimiento no se corre hacia atrás mes a mes',
+        janDues[1] === '2026-03-31' && janDues[3] === '2026-05-31');
+
+    // Pago anticipado: la fecha de pago es anterior al primer vencimiento
+    const janId = janSale.body?.data?.id;
+    const janCuota = janSale.body?.data?.installments?.[0]?.amount;
+    const early = await api('POST', '/payments', {
+        sale_id: janId, amount: janCuota, payment_date: '2026-02-01',
+    });
+    check('Se acepta un pago anticipado (antes del vencimiento)', early.status === 201,
+        JSON.stringify(early.body?.error ?? ''));
+    check('El pago anticipado se aplica a la cuota 1',
+        early.body?.data?.installments?.[0]?.status === 'pagada');
+
+    // Pago que cruza dos cuotas. Estas cuotas ya están vencidas (venta de
+    // enero), así que sirven además para comprobar la PRECEDENCIA de estados:
+    // una cuota vencida con abono parcial se reporta 'vencida', no 'parcial'
+    // — para cobranza, el atraso pesa más que el abono.
+    const cross = await api('POST', '/payments', { sale_id: janId, amount: Number(janCuota) + 100 });
+    const ci = cross.body?.data?.installments ?? [];
+    check('Un pago mayor a una cuota se reparte a la siguiente',
+        ci[1]?.status === 'pagada' && Number(ci[2]?.paid_amount) > 0,
+        `${ci[1]?.status} / abono cuota 3 = ${ci[2]?.paid_amount}`);
+    check('El excedente aplicado a la cuota 3 es exactamente Q100.00',
+        q(ci[2]?.paid_amount) === '100.00', `= ${ci[2]?.paid_amount}`);
+    check("Una cuota vencida con abono parcial se reporta 'vencida' (el atraso manda)",
+        ci[2]?.status === 'vencida', `= ${ci[2]?.status}`);
+
+    // El mismo caso pero con vencimientos futuros: ahí sí debe decir 'parcial'
+    const futureSale = await api('POST', '/sales', {
+        customer_id: customerId, payment_mode: 'credito_4',
+        items: [{ product_id: ruleProductId, quantity: 1 }],
+    });
+    const futureId = futureSale.body?.data?.id;
+    const futureCuota = Number(futureSale.body?.data?.installments?.[0]?.amount);
+    const partial = await api('POST', '/payments', { sale_id: futureId, amount: futureCuota / 2 });
+    check("Un abono parcial sobre una cuota no vencida se reporta 'parcial'",
+        partial.body?.data?.installments?.[0]?.status === 'parcial',
+        `= ${partial.body?.data?.installments?.[0]?.status}`);
+    check("La venta con un abono parcial queda 'al_dia'",
+        partial.body?.data?.sale?.account_status === 'al_dia',
+        `= ${partial.body?.data?.sale?.account_status}`);
+
+    // Saldar el resto en un solo pago
+    const restJan = Number(cross.body?.data?.sale?.balance);
+    const settle = await api('POST', '/payments', { sale_id: janId, amount: restJan });
+    check('Se puede saldar todo el resto en un pago', settle.status === 201);
+    check("La venta queda en estado 'pagada'", settle.body?.data?.sale?.account_status === 'pagada',
+        `= ${settle.body?.data?.sale?.account_status}`);
+    check('Todas las cuotas quedan pagadas y sin saldo',
+        settle.body?.data?.installments?.every((i) => i.status === 'pagada' && q(i.balance) === '0.00'));
+
+    // Anulación de venta y devolución de stock
+    const stockBefore = (await api('GET', `/products/${ruleProductId}`)).body?.data?.stock;
+    const toCancel = await api('POST', '/sales', {
+        customer_id: customerId, payment_mode: 'contado',
+        items: [{ product_id: ruleProductId, quantity: 2 }],
+    });
+    const cancelled = await api('PATCH', `/sales/${toCancel.body?.data?.id}/cancel`, {
+        reason: 'Prueba automatizada de anulación',
+    });
+    check('Se puede anular una venta sin pagos', cancelled.status === 200, `recibido ${cancelled.status}`);
+    const stockAfter = (await api('GET', `/products/${ruleProductId}`)).body?.data?.stock;
+    check('La anulación devuelve el stock', stockAfter === stockBefore, `${stockBefore} -> ${stockAfter}`);
+
+    const payCancelled = await api('POST', '/payments', {
+        sale_id: toCancel.body?.data?.id, amount: 10,
+    });
+    check('No se puede pagar una venta anulada (422)', payCancelled.status === 422,
+        `recibido ${payCancelled.status}`);
+
     // ------------------------------------------------------- EVENTOS PARA n8n
-    console.log('\n[8] Puente de eventos para n8n (outbox)');
+    console.log('\n[10] Puente de eventos para n8n (outbox)');
     const { pool } = await import('../config/db.js');
     const { rows } = await pool.query(
         `SELECT event_type, COUNT(*)::int AS n FROM integration_events GROUP BY event_type ORDER BY event_type`

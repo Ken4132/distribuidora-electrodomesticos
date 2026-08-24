@@ -34,3 +34,6 @@ Thumbs.db
 coverage/
 .tmp/
 tmp/
+
+# Capturas generadas por la prueba de navegador
+frontend/tests/shots/

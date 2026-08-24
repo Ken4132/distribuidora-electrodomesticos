@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { productsApi } from '../services/api.js';
 import { useDebounce } from '../hooks/useDebounce.js';
 import { useToast } from '../context/ToastContext.jsx';
+import { usePaymentModes } from '../hooks/usePaymentModes.js';
 import { Badge, EmptyState, Field, Modal, Pagination, SearchInput, Spinner } from '../components/ui.jsx';
 import { money } from '../utils/format.js';
 
@@ -9,6 +10,7 @@ const EMPTY = { code: '', name: '', description: '', category: 'General', brand:
 
 export default function Products() {
     const toast = useToast();
+    const { modes } = usePaymentModes();
     const [search, setSearch] = useState('');
     const [status, setStatus] = useState('active');
     const [lowStock, setLowStock] = useState(false);
@@ -17,6 +19,11 @@ export default function Products() {
     const [modal, setModal] = useState(null);
     const [stockModal, setStockModal] = useState(null);
     const debounced = useDebounce(search);
+
+    // Texto de ayuda construido con las reglas que informa el backend.
+    const pricingHint = modes.length
+        ? `Los precios se calculan solos: ${modes.map((m) => `${m.label.toLowerCase()} +${m.markup_percent}%`).join(', ')}`
+        : 'Los precios de venta se calculan automáticamente a partir del costo';
 
     const load = useCallback(async () => {
         setState((s) => ({ ...s, loading: true }));
@@ -57,9 +64,7 @@ export default function Products() {
             <div className="page__head">
                 <div>
                     <h1>Productos</h1>
-                    <p className="page__sub">
-                        Los precios se calculan solos: contado +30%, 4 pagos +50%, 8 pagos +70%
-                    </p>
+                    <p className="page__sub">{pricingHint}</p>
                 </div>
                 <button className="btn btn--primary" onClick={() => setModal({ mode: 'create', data: EMPTY })}>
                     Nuevo producto
@@ -171,20 +176,21 @@ export default function Products() {
 
 function ProductModal({ mode, initial, onClose, onSaved }) {
     const toast = useToast();
+    const { modes } = usePaymentModes();
     const [form, setForm] = useState({ ...EMPTY, ...initial });
     const [errors, setErrors] = useState({});
     const [busy, setBusy] = useState(false);
 
     const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
-    // Vista previa de precios calculada en el cliente con la MISMA regla del
-    // backend; al guardar, el valor autoritativo lo devuelve la base de datos.
+    // Vista previa de precios. Los porcentajes NO están escritos aquí: vienen
+    // del backend (/api/sales/payment-modes), que es la única fuente de la
+    // regla comercial. Al guardar, el precio definitivo lo calcula la BD.
     const cost = Number(form.cost) || 0;
-    const preview = {
-        contado: Math.round(cost * 1.3 * 100) / 100,
-        credito_4: Math.round(cost * 1.5 * 100) / 100,
-        credito_8: Math.round(cost * 1.7 * 100) / 100,
-    };
+    const preview = modes.map((m) => ({
+        ...m,
+        price: Math.round(cost * (1 + m.markup) * 100) / 100,
+    }));
 
     async function submit(e) {
         e.preventDefault();
@@ -264,20 +270,15 @@ function ProductModal({ mode, initial, onClose, onSaved }) {
                 <div className="price-preview span-3">
                     <span className="price-preview__title">Precios de venta calculados</span>
                     <div className="price-preview__row">
-                        <div>
-                            <span>Contado (+30%)</span>
-                            <strong>{money(preview.contado)}</strong>
-                        </div>
-                        <div>
-                            <span>4 pagos (+50%)</span>
-                            <strong>{money(preview.credito_4)}</strong>
-                            <em>{money(preview.credito_4 / 4)} c/u</em>
-                        </div>
-                        <div>
-                            <span>8 pagos (+70%)</span>
-                            <strong>{money(preview.credito_8)}</strong>
-                            <em>{money(preview.credito_8 / 8)} c/u</em>
-                        </div>
+                        {preview.map((m) => (
+                            <div key={m.key}>
+                                <span>
+                                    {m.label} (+{m.markup_percent}%)
+                                </span>
+                                <strong data-mode={m.key}>{money(m.price)}</strong>
+                                {m.installments > 1 && <em>{money(m.price / m.installments)} c/u</em>}
+                            </div>
+                        ))}
                     </div>
                 </div>
 

@@ -28,14 +28,20 @@ export const cancel = asyncHandler(async (req, res) => {
     res.json({ ok: true, data: sale, message: 'Venta anulada y stock restituido' });
 });
 
+/**
+ * Publica las reglas comerciales para que el frontend NO tenga que repetir
+ * los porcentajes. Una sola fuente de verdad en la aplicación.
+ */
 export const paymentModes = asyncHandler(async (_req, res) => {
     res.json({
         ok: true,
         data: Object.values(PAYMENT_MODES).map((m) => ({
             key: m.key,
             label: m.label,
+            markup: m.markup,
             markup_percent: Math.round(m.markup * 100),
             installments: m.installments,
+            price_field: m.priceField,
         })),
     });
 });
