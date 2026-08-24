@@ -127,4 +127,15 @@ export const paymentsApi = {
     void: (id, reason) => api.patch(`/payments/${id}/void`, { reason }),
 };
 
+export const integrationsApi = {
+    status: () => api.get('/integrations/status'),
+    events: (params) => api.get('/integrations/events', params),
+    event: (id) => api.get(`/integrations/events/${id}`),
+    retry: (id) => api.post(`/integrations/events/${id}/retry`),
+    dispatch: () => api.post('/integrations/dispatch'),
+    scan: () => api.post('/integrations/collections/scan'),
+    preview: () => api.get('/integrations/collections/preview'),
+    eventTypes: () => api.get('/integrations/event-types'),
+};
+
 export const dashboardApi = { get: () => api.get('/dashboard') };

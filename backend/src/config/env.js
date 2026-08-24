@@ -51,6 +51,22 @@ export const config = {
         dispatchEnabled:
             String(process.env.N8N_DISPATCH_ENABLED ?? 'false').toLowerCase() === 'true' &&
             Boolean(process.env.N8N_WEBHOOK_URL),
+        // Cada cuánto revisa el despachador si hay eventos por enviar.
+        dispatchIntervalMs: Number(process.env.N8N_DISPATCH_INTERVAL_MS ?? 60_000),
+        // Tiempo máximo de espera por respuesta del webhook.
+        timeoutMs: Number(process.env.N8N_TIMEOUT_MS ?? 10_000),
+    },
+
+    // Barrido de cobranza: genera installment.upcoming e installment.overdue.
+    collections: {
+        enabled: String(process.env.COLLECTIONS_SCAN_ENABLED ?? 'true').toLowerCase() === 'true',
+        // Días de anticipación con que se avisa de una cuota por vencer.
+        upcomingDays: Number(process.env.COLLECTIONS_UPCOMING_DAYS ?? 3),
+        // Cada cuántos días se vuelve a avisar de una cuota vencida.
+        // 0 = avisar una sola vez cuando se detecta el atraso.
+        overdueRepeatDays: Number(process.env.COLLECTIONS_OVERDUE_REPEAT_DAYS ?? 0),
+        // Cada cuánto se ejecuta el barrido dentro del proceso del backend.
+        scanIntervalMs: Number(process.env.COLLECTIONS_SCAN_INTERVAL_MS ?? 6 * 60 * 60 * 1000),
     },
 
     seed: {

@@ -224,8 +224,32 @@ try {
     check('El estado de cuenta del cliente muestra Q 3,375.00', saldoCliente.includes('3,375.00'), saldoCliente);
     await shot('12-estado-de-cuenta');
 
+    // -------------------------------------------------------- INTEGRACIONES
+    log('\n[UI 7] Pantalla de integraciones');
+    await page.click('a.navlink:has-text("Integraciones")');
+    await page.waitForSelector('h1:has-text("Integraciones")', { timeout: 10000 });
+    check('La pantalla de integraciones carga', true);
+
+    const enviados = await page.locator('.card:has-text("Enviados") .card__value').textContent();
+    check('Muestra el contador de eventos enviados', /\d+/.test(enviados), enviados);
+    check('Muestra el desglose por tipo de evento', await page.isVisible('text=payment.created'));
+    check('Avisa de que el envío a n8n está desactivado', await page.isVisible('.alert--warn'));
+    await shot('13-integraciones');
+
+    await page.click('tbody button:has-text("Ver") >> nth=0');
+    await page.waitForSelector('.modal');
+    check('El detalle del evento muestra el contenido enviado', await page.isVisible('.code-block'));
+    check('El detalle muestra la sección de intentos', await page.isVisible('text=Intentos de entrega'));
+    await shot('14-evento-detalle');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.modal', { state: 'detached' });
+
+    await page.click('button:has-text("Barrer cuotas")');
+    await page.waitForSelector('.toast--success', { timeout: 10000 });
+    check('El barrido de cuotas se puede ejecutar desde la interfaz', true);
+
     // -------------------------------------------------------------- CONSOLA
-    log('\n[UI 7] Salud del navegador');
+    log('\n[UI 8] Salud del navegador');
     const realErrors = consoleErrors.filter((e) => !/favicon|Failed to load resource/i.test(e));
     check('Sin errores de JavaScript en consola', realErrors.length === 0, realErrors.slice(0, 3).join(' | '));
 } catch (error) {

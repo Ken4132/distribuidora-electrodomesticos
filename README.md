@@ -4,11 +4,14 @@ Sistema web para la operación comercial de la distribuidora: clientes,
 productos, ventas al contado y a crédito, cuotas, pagos y estado de cuenta,
 con un puente de eventos preparado para automatizaciones en n8n.
 
-**Estado:** núcleo operativo funcional y probado.
-Flujo completo disponible: Cliente → Producto → Venta → Cuotas → Pago → Saldo → Inventario.
+**Estado:** núcleo operativo y puente de integración funcionales y probados.
+Flujo completo: Cliente → Producto → Venta → Cuotas → Pago → Saldo → Inventario → Evento → n8n.
 
 Las reglas de negocio (incluidas las que se asumieron y están pendientes de
 validar) están en **[`docs/REGLAS-DE-NEGOCIO.md`](docs/REGLAS-DE-NEGOCIO.md)**.
+
+La integración con n8n —eventos, firma, reintentos y flujo importable— está en
+**[`docs/INTEGRACION-N8N.md`](docs/INTEGRACION-N8N.md)**.
 
 ---
 
@@ -83,7 +86,8 @@ Deberías ver:
 ```
 [db] Conexión establecida
 [api] Escuchando en http://localhost:4000/api  (entorno: development)
-[n8n] Despacho de eventos: inactivo (solo outbox)
+[n8n] Despacho inactivo: los eventos se acumulan en la bandeja de salida.
+[cobranza] Barrido activo cada 6h (aviso 3 día(s) antes del vencimiento)
 ```
 
 Comprobación rápida: abre <http://localhost:4000/api/health> en el navegador.
@@ -122,6 +126,17 @@ Recorre el flujo completo contra la API real (94 verificaciones, incluidos
 casos de error, aritmética de precios y cuotas, y consistencia de las reglas
 entre capas). Debe terminar en `0 fallidas`.
 
+Integración con n8n (no necesita la API levantada ni n8n: los levanta solos):
+
+```bash
+cd backend
+npm run test:n8n
+```
+
+47 verificaciones: entrega firmada, rechazo de firma inválida y de cuerpo
+alterado, reenvío de peticiones viejas, duplicados, caída de n8n con reintento
+posterior, eventos de cobranza e idempotencia del barrido.
+
 Prueba en navegador (opcional, con backend **y** frontend levantados):
 
 ```bash
@@ -149,6 +164,8 @@ Recorre la interfaz como una persona (24 verificaciones) y deja capturas en
 | `npm run db:setup` | `migrate` + `seed` |
 | `npm run db:reset` | **Borra el esquema completo.** Bloqueado en producción |
 | `npm run test:flow` | Prueba de humo del flujo completo (requiere la API levantada) |
+| `npm run test:n8n` | Prueba de integración del puente hacia n8n (se levanta sola) |
+| `npm run n8n:receiver` | Receptor local que simula el webhook de n8n |
 
 ### frontend
 
@@ -171,10 +188,14 @@ distribuidora-electrodomesticos/
 ├── README.md
 ├── .gitignore
 ├── docs/
-│   └── REGLAS-DE-NEGOCIO.md      reglas definidas y reglas asumidas
+│   ├── REGLAS-DE-NEGOCIO.md      reglas definidas y reglas asumidas
+│   ├── INTEGRACION-N8N.md        eventos, firma, reintentos y puesta en marcha
+│   └── n8n/
+│       └── distribuidora-webhook.json   flujo listo para importar en n8n
 ├── database/
 │   ├── migrations/
-│   │   └── 001_init.sql          esquema completo + vistas derivadas
+│   │   ├── 001_init.sql          esquema completo + vistas derivadas
+│   │   └── 002_outbox_dispatcher.sql   idempotencia, reintentos y trazas
 │   └── seeds/                    reservado para cargas de datos en SQL
 ├── backend/
 │   ├── .env.example              plantilla de configuración (sin secretos)
@@ -189,8 +210,9 @@ distribuidora-electrodomesticos/
 │       ├── models/               acceso a datos (SQL parametrizado)
 │       ├── validators/           esquemas Zod
 │       ├── middleware/           auth · validate · errorHandler
-│       ├── utils/                money · pricing · dates · AppError
-│       └── scripts/              migrate · seed · reset · smoke-test
+│       ├── utils/                money · pricing · dates · signature · AppError
+│       └── scripts/              migrate · seed · reset · smoke-test ·
+│                                 n8n-receiver · n8n-test
 └── frontend/
     ├── .env.example
     ├── index.html
@@ -203,8 +225,9 @@ distribuidora-electrodomesticos/
         ├── styles.css
         ├── pages/                Login · Dashboard · Customers ·
         │                         CustomerDetail · Products · NewSale ·
-        │                         Sales · SaleDetail · Receivables
-        ├── components/           Layout · ProtectedRoute · ui
+        │                         Sales · SaleDetail · Receivables ·
+        │                         Integrations
+        ├── components/           Layout · ProtectedRoute · ErrorBoundary · ui
         ├── context/              AuthContext · ToastContext
         ├── hooks/                useDebounce · usePaymentModes
         ├── services/             api.js (cliente HTTP)
@@ -223,7 +246,7 @@ customers ──< sales ──< sale_items >── products
                 └──< payments
 
 users        (autenticación)
-integration_events   (outbox de eventos hacia n8n)
+integration_events ──< integration_event_attempts   (outbox y trazas de envío)
 ```
 
 Vistas derivadas (no almacenan nada, se calculan al consultarlas):
@@ -278,33 +301,48 @@ Todos los endpoints cuelgan de `/api` y requieren
 | POST | `/payments` | Registrar pago |
 | GET | `/payments/:id` | Detalle de un pago |
 | PATCH | `/payments/:id/void` | Anular pago (admin) |
+| GET | `/integrations/status` | Estado del puente y de la bandeja de salida (admin) |
+| GET | `/integrations/events` | Eventos con filtros (admin) |
+| GET | `/integrations/events/:id` | Evento con su historial de intentos (admin) |
+| POST | `/integrations/events/:id/retry` | Reenviar un evento (admin) |
+| POST | `/integrations/dispatch` | Forzar el despacho ahora (admin) |
+| POST | `/integrations/collections/scan` | Forzar el barrido de cuotas (admin) |
+| GET | `/integrations/collections/preview` | Cuotas en la mira de cobranza (admin) |
 
 Respuesta correcta: `{ "ok": true, "data": … }`
 Respuesta de error: `{ "ok": false, "error": { "code", "message", "details" } }`
 
 ---
 
-## Integración con n8n (siguiente etapa, aún no activa)
+## Integración con n8n
 
 La aplicación **no depende de n8n**. Primero persiste la información y después
 registra el evento en `integration_events`, dentro de la misma transacción
-(patrón *outbox*). El envío al webhook ocurre después del commit; si n8n está
-caído el evento queda pendiente y registrar un cliente, una venta o un pago
-nunca falla.
+(patrón *outbox*). El envío ocurre después del commit, firmado con HMAC-SHA256
+y con reintentos de espera creciente; si n8n está caído el evento espera, pero
+registrar un cliente, una venta o un pago nunca falla.
 
-Eventos que ya se emiten: `customer.created`, `customer.updated`,
-`sale.created`, `sale.paid`, `sale.cancelled`, `payment.created`.
+Eventos que emite el sistema:
 
-Diseñados y pendientes del proceso que los dispare: `installment.upcoming`,
-`installment.overdue`.
+| Evento | Cuándo |
+| ------ | ------ |
+| `customer.created` · `customer.updated` | Alta o edición de un cliente |
+| `sale.created` | Venta registrada |
+| `sale.paid` | Un pago termina de saldar la venta |
+| `sale.cancelled` | Venta anulada |
+| `payment.created` | Pago registrado |
+| `installment.upcoming` | Cuota que vence dentro de N días |
+| `installment.overdue` | Cuota vencida |
 
-Para activar el envío, en `backend/.env`:
+Los dos últimos los genera un barrido programado dentro del backend, con clave
+de idempotencia: una cuota no genera dos avisos aunque el barrido corra varias
+veces.
 
-```ini
-N8N_WEBHOOK_URL=https://tu-n8n/webhook/distribuidora
-N8N_WEBHOOK_SECRET=<secreto compartido>
-N8N_DISPATCH_ENABLED=true
-```
+La pantalla **Integraciones** (solo administradores) muestra el estado del
+puente, los eventos con su historial de intentos y permite reenviar a mano.
+
+Puesta en marcha, catálogo de eventos con ejemplos, verificación de la firma en
+n8n y flujo importable: **[`docs/INTEGRACION-N8N.md`](docs/INTEGRACION-N8N.md)**.
 
 Las credenciales de n8n viven **solo** en variables de entorno del backend.
 Nunca en el frontend ni en el repositorio.
@@ -341,14 +379,16 @@ genera un `JWT_SECRET` propio y no reutilices las credenciales de ejemplo.
 | La página carga pero todo falla con error de conexión | El backend no está levantado, o `VITE_API_TARGET` no coincide con el `PORT` del backend. |
 | El puerto 4000 o 5173 está ocupado | Cambia `PORT` en `backend/.env` y `VITE_API_TARGET` / `VITE_PORT` en `frontend/.env`. |
 | Las fechas salen un día corridas | Revisa `APP_TIMEZONE`. Al cambiarla hay que actualizar también `app_today()` con una migración. |
+| Los eventos quedan en `pendiente` y no salen | El despacho está apagado. Revisa `N8N_DISPATCH_ENABLED` y `N8N_WEBHOOK_URL`, o mira la pantalla de Integraciones. Más casos en `docs/INTEGRACION-N8N.md`. |
 | `Demasiados intentos. Espera unos minutos.` | Protección contra fuerza bruta: 10 intentos de login cada 10 minutos. Espera, o reinicia el backend (el contador vive en memoria). Aparece sobre todo al repetir la prueba de navegador varias veces seguidas. |
 
 ---
 
 ## Siguiente etapa (todavía no implementada)
 
-1. Proceso programado que emita `installment.upcoming` e `installment.overdue`,
-   y despachador del outbox con reintentos.
-2. Primera automatización real en n8n a partir de `payment.created`.
-3. Reportes y estado de cuenta imprimible.
-4. Despliegue: PostgreSQL gestionado + backend + build del frontend.
+1. Conectar el flujo de n8n a un canal real de mensajería (WhatsApp Business,
+   Twilio o correo) para los recordatorios de cobranza.
+2. Reportes y estado de cuenta imprimible.
+3. Despliegue: PostgreSQL gestionado + backend + build del frontend.
+4. Reglas adicionales pendientes de definir con el propietario: monto mínimo de
+   abono, mora, enganche. Ver `docs/REGLAS-DE-NEGOCIO.md`.

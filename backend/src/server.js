@@ -1,6 +1,8 @@
 import { createApp } from './app.js';
 import { config } from './config/env.js';
 import { pool, closePool } from './config/db.js';
+import { startDispatcher, stopDispatcher } from './services/events.service.js';
+import { startCollectionsScanner, stopCollectionsScanner } from './services/collections.service.js';
 
 const app = createApp();
 
@@ -16,11 +18,33 @@ async function start() {
 
     const server = app.listen(config.port, () => {
         console.log(`[api] Escuchando en http://localhost:${config.port}/api  (entorno: ${config.env})`);
-        console.log(`[n8n] Despacho de eventos: ${config.n8n.dispatchEnabled ? 'ACTIVO' : 'inactivo (solo outbox)'}`);
+
+        if (config.n8n.dispatchEnabled) {
+            startDispatcher();
+            console.log(
+                `[n8n] Despacho ACTIVO hacia ${config.n8n.webhookUrl} cada ${config.n8n.dispatchIntervalMs / 1000}s`
+            );
+            if (!config.n8n.webhookSecret) {
+                console.warn(
+                    '[n8n] ADVERTENCIA: no hay N8N_WEBHOOK_SECRET. Los envíos irán SIN FIRMA y n8n no podrá verificar su origen.'
+                );
+            }
+        } else {
+            console.log('[n8n] Despacho inactivo: los eventos se acumulan en la bandeja de salida.');
+        }
+
+        if (startCollectionsScanner()) {
+            console.log(
+                `[cobranza] Barrido activo cada ${config.collections.scanIntervalMs / 3600000}h ` +
+                    `(aviso ${config.collections.upcomingDays} día(s) antes del vencimiento)`
+            );
+        }
     });
 
     const shutdown = async (signal) => {
         console.log(`\n[api] ${signal} recibido, cerrando...`);
+        stopDispatcher();
+        stopCollectionsScanner();
         server.close(async () => {
             await closePool();
             process.exit(0);

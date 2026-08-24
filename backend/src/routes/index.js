@@ -4,6 +4,7 @@ import customerRoutes from './customer.routes.js';
 import productRoutes from './product.routes.js';
 import saleRoutes from './sale.routes.js';
 import paymentRoutes from './payment.routes.js';
+import integrationRoutes from './integration.routes.js';
 import { query } from '../config/db.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -24,6 +25,7 @@ router.use('/customers', customerRoutes);
 router.use('/products', productRoutes);
 router.use('/sales', saleRoutes);
 router.use('/payments', paymentRoutes);
+router.use('/integrations', integrationRoutes);
 
 /** Resumen operativo para la pantalla de inicio. */
 router.get(

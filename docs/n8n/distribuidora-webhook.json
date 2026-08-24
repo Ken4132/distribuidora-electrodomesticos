@@ -1,0 +1,235 @@
+{
+  "name": "Distribuidora — Puente de eventos",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "distribuidora",
+        "options": {
+          "rawBody": true
+        },
+        "responseMode": "responseNode"
+      },
+      "id": "webhook-entrada",
+      "name": "Webhook Distribuidora",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-460, 300],
+      "webhookId": "distribuidora-eventos"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Verificación de la firma HMAC-SHA256.\n// El secreto se toma de la variable de entorno de n8n: nunca escribirlo aquí.\nconst crypto = require('crypto');\n\nconst SECRET = $env.DISTRIBUIDORA_WEBHOOK_SECRET;\nconst TOLERANCE_SECONDS = 300;\n\nif (!SECRET) {\n  throw new Error('Falta la variable de entorno DISTRIBUIDORA_WEBHOOK_SECRET');\n}\n\nconst headers = $input.item.json.headers;\nconst rawBody = $input.item.json.body;\nconst timestamp = headers['x-webhook-timestamp'];\nconst received = headers['x-signature-256'];\nconst eventId = headers['x-event-id'];\n\nif (!timestamp || !received) {\n  throw new Error('Faltan las cabeceras de firma');\n}\n\n// El timestamp va firmado: una petición capturada no se puede reenviar después.\nconst age = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp));\nif (!Number.isFinite(age) || age > TOLERANCE_SECONDS) {\n  throw new Error(`Petición fuera de tolerancia (${age}s)`);\n}\n\nconst expected = 'sha256=' + crypto\n  .createHmac('sha256', SECRET)\n  .update(`${timestamp}.${rawBody}`, 'utf8')\n  .digest('hex');\n\n// Comparación en tiempo constante.\nconst a = Buffer.from(expected, 'utf8');\nconst b = Buffer.from(String(received), 'utf8');\nif (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {\n  throw new Error('Firma inválida');\n}\n\nconst payload = JSON.parse(rawBody);\nreturn { json: { ...payload, _event_id: eventId } };"
+      },
+      "id": "verificar-firma",
+      "name": "Verificar firma",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-240, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Descarte de duplicados.\n// La entrega es \"al menos una vez\": si n8n procesa un evento pero la\n// respuesta se pierde, el sistema lo reintentará. Sin este paso, un cliente\n// podría recibir el mismo recordatorio dos veces.\n//\n// Esta versión usa la memoria del workflow, que se pierde al reiniciar n8n.\n// Para producción, sustituir por una consulta a una tabla o a Redis.\nconst id = String($input.item.json._event_id ?? $input.item.json.id);\nconst store = $getWorkflowStaticData('global');\nstore.seen = store.seen || {};\n\nif (store.seen[id]) {\n  return { json: { ...$input.item.json, _duplicado: true } };\n}\n\nstore.seen[id] = Date.now();\n\n// Poda: conservar solo los últimos 5000 identificadores.\nconst ids = Object.keys(store.seen);\nif (ids.length > 5000) {\n  ids.sort((x, y) => store.seen[x] - store.seen[y])\n     .slice(0, ids.length - 5000)\n     .forEach((k) => delete store.seen[k]);\n}\n\nreturn { json: { ...$input.item.json, _duplicado: false } };"
+      },
+      "id": "descartar-duplicados",
+      "name": "Descartar duplicados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-20, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "version": 2 },
+          "conditions": [
+            {
+              "leftValue": "={{ $json._duplicado }}",
+              "rightValue": false,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "es-nuevo",
+      "name": "¿Es nuevo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "version": 2 },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.event }}",
+                    "rightValue": "payment.created",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "Pago registrado"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "version": 2 },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.event }}",
+                    "rightValue": "installment.upcoming",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "Cuota por vencer"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "version": 2 },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.event }}",
+                    "rightValue": "installment.overdue",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "Cuota vencida"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "version": 2 },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.event }}",
+                    "rightValue": "sale.created",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "Venta registrada"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "version": 2 },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.event }}",
+                    "rightValue": "sale.paid",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "outputKey": "Venta saldada"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "id": "enrutar",
+      "name": "Enrutar por evento",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [420, 220]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// PRIMERA AUTOMATIZACIÓN: mensaje de confirmación de pago.\n// Aquí solo se arma el texto. Conecta después el nodo de tu canal real\n// (WhatsApp Business, Twilio, correo, Telegram).\nconst d = $input.item.json.data;\nconst q = (v) => 'Q' + Number(v).toLocaleString('es-GT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\n\nconst saldo = Number(d.remaining_balance);\nconst cierre = saldo > 0\n  ? `Su saldo pendiente es de ${q(saldo)}.`\n  : '¡Con este pago su cuenta queda saldada! Gracias por su preferencia.';\n\nconst mensaje = [\n  `Hola ${d.customer.full_name},`,\n  '',\n  `Recibimos su pago de ${q(d.amount)} el ${d.payment_date}.`,\n  `Recibo: ${d.receipt_number}  ·  Venta: ${d.sale_number}`,\n  cierre,\n  '',\n  'Distribuidora de Electrodomésticos',\n].join('\\n');\n\nreturn { json: { telefono: d.customer.phone, mensaje, evento: 'payment.created' } };"
+      },
+      "id": "mensaje-pago",
+      "name": "Mensaje de pago recibido",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 60]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Recordatorio de cuota próxima a vencer.\nconst d = $input.item.json.data;\nconst q = (v) => 'Q' + Number(v).toLocaleString('es-GT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\n\nconst mensaje = [\n  `Hola ${d.customer.full_name},`,\n  '',\n  `Le recordamos que su cuota ${d.installment_number} de ${d.installments_count}`,\n  `por ${q(d.balance)} vence el ${d.due_date} (en ${d.days_to_due} días).`,\n  `Venta: ${d.sale_number}`,\n  '',\n  'Distribuidora de Electrodomésticos',\n].join('\\n');\n\nreturn { json: { telefono: d.customer.phone, mensaje, evento: 'installment.upcoming' } };"
+      },
+      "id": "mensaje-por-vencer",
+      "name": "Recordatorio de cuota",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 220]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Aviso de cuota vencida.\nconst d = $input.item.json.data;\nconst q = (v) => 'Q' + Number(v).toLocaleString('es-GT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });\n\nconst mensaje = [\n  `Hola ${d.customer.full_name},`,\n  '',\n  `Su cuota ${d.installment_number} de ${d.installments_count} por ${q(d.balance)}`,\n  `venció el ${d.due_date} (${d.days_overdue} días de atraso).`,\n  `Venta: ${d.sale_number}`,\n  '',\n  'Puede pasar a cancelarla o comunicarse con nosotros.',\n  'Distribuidora de Electrodomésticos',\n].join('\\n');\n\nreturn { json: { telefono: d.customer.phone, mensaje, evento: 'installment.overdue', prioridad: 'alta' } };"
+      },
+      "id": "mensaje-vencida",
+      "name": "Aviso de cuota vencida",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 380]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, event_id: $json._event_id ?? null }) }}",
+        "options": { "responseCode": 200 }
+      },
+      "id": "responder-ok",
+      "name": "Responder 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [980, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Distribuidora": {
+      "main": [[{ "node": "Verificar firma", "type": "main", "index": 0 }]]
+    },
+    "Verificar firma": {
+      "main": [[{ "node": "Descartar duplicados", "type": "main", "index": 0 }]]
+    },
+    "Descartar duplicados": {
+      "main": [[{ "node": "¿Es nuevo?", "type": "main", "index": 0 }]]
+    },
+    "¿Es nuevo?": {
+      "main": [
+        [{ "node": "Enrutar por evento", "type": "main", "index": 0 }],
+        [{ "node": "Responder 200", "type": "main", "index": 0 }]
+      ]
+    },
+    "Enrutar por evento": {
+      "main": [
+        [{ "node": "Mensaje de pago recibido", "type": "main", "index": 0 }],
+        [{ "node": "Recordatorio de cuota", "type": "main", "index": 0 }],
+        [{ "node": "Aviso de cuota vencida", "type": "main", "index": 0 }],
+        [{ "node": "Responder 200", "type": "main", "index": 0 }],
+        [{ "node": "Responder 200", "type": "main", "index": 0 }],
+        [{ "node": "Responder 200", "type": "main", "index": 0 }]
+      ]
+    },
+    "Mensaje de pago recibido": {
+      "main": [[{ "node": "Responder 200", "type": "main", "index": 0 }]]
+    },
+    "Recordatorio de cuota": {
+      "main": [[{ "node": "Responder 200", "type": "main", "index": 0 }]]
+    },
+    "Aviso de cuota vencida": {
+      "main": [[{ "node": "Responder 200", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "meta": {
+    "instanceId": "distribuidora-electrodomesticos"
+  },
+  "tags": []
+}

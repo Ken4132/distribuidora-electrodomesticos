@@ -8,6 +8,7 @@ const LINKS = [
     { to: '/productos', label: 'Productos' },
     { to: '/ventas', label: 'Ventas' },
     { to: '/cobranza', label: 'Cobranza' },
+    { to: '/integraciones', label: 'Integraciones', adminOnly: true },
 ];
 
 export function Layout() {
@@ -22,7 +23,7 @@ export function Layout() {
                     <span className="topbar__sub">Sistema de gestión</span>
                 </div>
                 <nav className="topbar__nav">
-                    {LINKS.map((l) => (
+                    {LINKS.filter((l) => !l.adminOnly || user?.role === 'admin').map((l) => (
                         <NavLink
                             key={l.to}
                             to={l.to}

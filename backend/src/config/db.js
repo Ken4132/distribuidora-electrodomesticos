@@ -10,6 +10,16 @@ const { Pool, types } = pg;
 // objeto Date, para evitar corrimientos de zona horaria.
 types.setTypeParser(1082, (value) => value);
 
+// BIGINT (OID 20) también llega como string por si excede el entero seguro de
+// JavaScript. Aquí solo se usa para identificadores autoincrementales, que
+// nunca llegarán a 9.007.199.254.740.991, así que se convierten a número.
+// Sin esto, un mismo identificador viajaba como "3" en un evento y como 3 en
+// otro, y quien consuma los webhooks tendría que normalizarlo por su cuenta.
+types.setTypeParser(20, (value) => {
+    const n = Number(value);
+    return Number.isSafeInteger(n) ? n : value;
+});
+
 export const pool = new Pool(
     config.db.connectionString
         ? { connectionString: config.db.connectionString, max: 10 }

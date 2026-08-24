@@ -15,7 +15,9 @@
     "seed": "node src/scripts/seed.js",
     "db:reset": "node src/scripts/reset.js",
     "db:setup": "npm run migrate && npm run seed",
-    "test:flow": "node src/scripts/smoke-test.js"
+    "test:flow": "node src/scripts/smoke-test.js",
+    "n8n:receiver": "node src/scripts/n8n-receiver.js",
+    "test:n8n": "node src/scripts/n8n-test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

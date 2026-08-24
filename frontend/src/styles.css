@@ -862,3 +862,15 @@ h2 {
     word-break: break-word;
     overflow-x: auto;
 }
+
+.code-block {
+    background: #1c2530;
+    color: #e6edf3;
+    padding: 0.8rem 1rem;
+    border-radius: var(--radius);
+    font-size: 0.8rem;
+    line-height: 1.45;
+    max-height: 320px;
+    overflow: auto;
+    white-space: pre;
+}

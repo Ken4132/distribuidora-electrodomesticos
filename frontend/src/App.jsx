@@ -14,6 +14,7 @@ import NewSale from './pages/NewSale.jsx';
 import Sales from './pages/Sales.jsx';
 import SaleDetail from './pages/SaleDetail.jsx';
 import Receivables from './pages/Receivables.jsx';
+import Integrations from './pages/Integrations.jsx';
 
 export default function App() {
     return (
@@ -38,6 +39,7 @@ export default function App() {
                                 <Route path="/ventas/nueva" element={<NewSale />} />
                                 <Route path="/ventas/:id" element={<SaleDetail />} />
                                 <Route path="/cobranza" element={<Receivables />} />
+                                <Route path="/integraciones" element={<Integrations />} />
                             </Route>
                             <Route path="*" element={<Navigate to="/" replace />} />
                         </Routes>
