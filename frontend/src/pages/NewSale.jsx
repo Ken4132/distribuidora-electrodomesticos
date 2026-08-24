@@ -397,7 +397,7 @@ function ProductPicker({ onPick, mode }) {
                                     <span className="mono">{p.code}</span> {p.name}
                                 </strong>
                                 <span className="muted">
-                                    {money(unitPriceFor(p, currentMode))} · stock {p.stock}
+                                    {money(unitPriceFor(p, mode))} · stock {p.stock}
                                     {p.stock <= 0 ? ' (sin existencias)' : ''}
                                 </span>
                             </button>

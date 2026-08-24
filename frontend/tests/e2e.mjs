@@ -20,6 +20,8 @@
  *   E2E_USER       (por defecto admin)
  *   E2E_PASSWORD   (por defecto Admin123!)
  *   E2E_SHOTS      carpeta donde guardar capturas (por defecto ./tests/shots)
+ *   E2E_BROWSER    ruta a un Chromium ya instalado, para entornos sin acceso
+ *                  a la descarga de navegadores de Playwright
  */
 import { mkdirSync } from 'node:fs';
 
@@ -58,7 +60,9 @@ function check(name, condition, extra = '') {
 
 mkdirSync(SHOTS, { recursive: true });
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(
+    process.env.E2E_BROWSER ? { executablePath: process.env.E2E_BROWSER } : {}
+);
 const context = await browser.newContext({ viewport: { width: 1500, height: 950 } });
 const page = await context.newPage();
 page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
@@ -227,6 +231,13 @@ try {
 } catch (error) {
     failures.push(`Excepción: ${error.message}`);
     log(`\n${color.bad}Excepción durante la prueba:${color.off} ${error.message}`);
+    // Casi siempre la causa real está en la consola del navegador (por ejemplo
+    // un error de render que deja la página en blanco). Mostrarla evita tener
+    // que abrir la captura para adivinar qué pasó.
+    if (consoleErrors.length) {
+        log(`\n${color.bad}Errores de consola del navegador:${color.off}`);
+        consoleErrors.slice(0, 5).forEach((e) => log(`  ${e}`));
+    }
     await shot('99-error');
 } finally {
     await browser.close();

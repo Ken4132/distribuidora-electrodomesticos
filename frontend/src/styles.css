@@ -851,3 +851,14 @@ h2 {
     border-bottom-color: var(--primary);
     font-weight: 600;
 }
+
+.error-detail {
+    background: var(--danger-bg);
+    color: var(--danger);
+    padding: 0.7rem 0.85rem;
+    border-radius: var(--radius);
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: auto;
+}
