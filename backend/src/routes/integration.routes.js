@@ -1,15 +1,17 @@
 import { Router } from 'express';
 import * as ctrl from '../controllers/integration.controller.js';
 import { validate } from '../middleware/validate.js';
-import { requireAuth, requireRole } from '../middleware/auth.js';
+import { requireAuth } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { idParam } from '../validators/common.schema.js';
 import { listEventsSchema } from '../validators/integration.schema.js';
 
 const router = Router();
 
 // La bandeja de salida expone datos de clientes y montos, y permite reenviar
-// eventos. Solo administradores.
-router.use(requireAuth, requireRole('admin'));
+// eventos. Exige el permiso `integrations.manage`, que de fábrica solo tiene
+// el rol de administrador.
+router.use(requireAuth, requirePermission('integrations.manage', { module: 'integraciones' }));
 
 router.get('/status', ctrl.status);
 router.get('/event-types', ctrl.catalog);

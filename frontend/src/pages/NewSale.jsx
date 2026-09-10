@@ -7,10 +7,14 @@ import { Field } from '../components/ui.jsx';
 import { usePaymentModes, unitPriceFor } from '../hooks/usePaymentModes.js';
 import { formatDate, money, todayIso } from '../utils/format.js';
 
-/** Descripción de la modalidad construida con las reglas que envía el backend. */
+/**
+ * Descripción de la modalidad construida con las reglas que envía el backend.
+ * El porcentaje sobre el costo solo llega a quien puede ver costos (RN-0001);
+ * para el resto se describe la modalidad sin revelarlo.
+ */
 function modeHint(m) {
     const cuotas = m.installments === 1 ? '1 pago' : `${m.installments} cuotas mensuales`;
-    return `Costo +${m.markup_percent}% · ${cuotas}`;
+    return m.markup_percent === undefined ? cuotas : `Costo +${m.markup_percent}% · ${cuotas}`;
 }
 
 export default function NewSale() {

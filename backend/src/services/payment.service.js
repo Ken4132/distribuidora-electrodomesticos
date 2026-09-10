@@ -5,6 +5,8 @@ import { AppError } from '../utils/AppError.js';
 import { money, toCents, fromCents } from '../utils/money.js';
 import { today, isIsoDate } from '../utils/dates.js';
 import { recordEvent, EVENT_TYPES, dispatchInBackground } from './events.service.js';
+import { saleInScope, scopeDenialMessage, ownPortfolioFilter } from './scope.service.js';
+import { recordAudit } from './audit.service.js';
 
 export const listPayments = (opts) => Payment.list(opts);
 
@@ -20,13 +22,21 @@ export async function getPayment(id) {
  *
  * Todo ocurre en una transacción con las cuotas bloqueadas, de modo que dos
  * pagos simultáneos no puedan generar sobrepago.
+ *
+ * @param {object} input   datos del pago ya validados
+ * @param {object} actor   quien cobra: { id, username, role, ip, userAgent }
+ * @param {object} scope   alcance resuelto: { global, userId } (ver scope.service.js)
  */
-export async function createPayment(input, userId) {
+export async function createPayment(input, actor, scope) {
     const paymentDate = input.payment_date && isIsoDate(input.payment_date) ? input.payment_date : today();
+    const userId = actor?.id ?? null;
 
-    const saleId = await withTransaction(async (client) => {
+    let saleId;
+    try {
+        saleId = await withTransaction(async (client) => {
         const { rows: sales } = await client.query(
-            `SELECT s.id, s.customer_id, s.status, s.total, c.full_name, c.dpi, c.phone
+            `SELECT s.id, s.customer_id, s.status, s.total, s.created_by, s.payment_mode,
+                    c.full_name, c.dpi, c.phone
                FROM sales s JOIN customers c ON c.id = s.customer_id
               WHERE s.id = $1
                 FOR UPDATE OF s`,
@@ -34,6 +44,19 @@ export async function createPayment(input, userId) {
         );
         const sale = sales[0];
         if (!sale) throw AppError.badRequest('La venta indicada no existe');
+
+        // ALCANCE (regla U6). Se comprueba aquí, dentro de la transacción y
+        // sobre la MISMA fila que ya quedó bloqueada por FOR UPDATE. Hacerlo
+        // en el middleware obligaría a leer la venta antes de la transacción
+        // y dejaría una ventana entre comprobar el dueño y cobrar.
+        const inScope = saleInScope(sale, scope);
+        if (!inScope.allowed) {
+            throw AppError.forbidden(scopeDenialMessage(inScope.reason), {
+                sale_id: Number(sale.id),
+                motivo: inScope.reason,
+            });
+        }
+
         if (sale.status === 'anulada') throw AppError.unprocessable('No se pueden registrar pagos en una venta anulada');
 
         const pending = await Payment.lockPendingInstallments(client, sale.id);
@@ -123,7 +146,26 @@ export async function createPayment(input, userId) {
         }
 
         return sale.id;
-    });
+        });
+    } catch (error) {
+        // Un intento de cobrar fuera de la cartera propia es justo lo que hay
+        // que poder ver en una auditoría. Se registra DESPUÉS del rollback,
+        // porque la transacción ya quedó abortada y nada escrito en ella
+        // habría sobrevivido.
+        if (error?.code === 'FORBIDDEN') {
+            await recordAudit({
+                actor,
+                action: 'payment.create.denegado',
+                module: 'pagos',
+                entity: 'sale',
+                entityId: Number(input.sale_id) || null,
+                summary: `Intentó registrar un pago en la venta #${input.sale_id}, fuera de su cartera: ${error.message}`,
+                details: { sale_id: Number(input.sale_id) || null, motivo: error.details?.motivo ?? null },
+                result: 'denegado',
+            });
+        }
+        throw error;
+    }
 
     dispatchInBackground();
 
@@ -144,10 +186,20 @@ export async function voidPayment(id, reason) {
     return Sale.findById(result);
 }
 
-/** Cuentas por cobrar: ventas con saldo, ordenadas por urgencia de cobro. */
-export async function receivables({ status = '', customerId = null, page = 1, pageSize = 20 }) {
+/**
+ * Cuentas por cobrar: ventas con saldo, ordenadas por urgencia de cobro.
+ *
+ * Con alcance propio (`receivables.view.own`) solo se devuelven los créditos
+ * que registró el propio usuario. El filtro va en el SQL, no en el resultado:
+ * lo que no le corresponde nunca sale de la base de datos.
+ */
+export async function receivables({ status = '', customerId = null, page = 1, pageSize = 20, scope = null }) {
     const filters = ["status = 'activa'", 'balance > 0'];
     const params = [];
+
+    if (scope && !scope.global) {
+        filters.push(ownPortfolioFilter(scope, params));
+    }
 
     if (status) {
         params.push(status);

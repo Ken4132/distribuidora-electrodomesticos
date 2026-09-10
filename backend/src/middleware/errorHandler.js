@@ -19,10 +19,18 @@ function translatePgError(err) {
                 return AppError.conflict('Ya existe un producto con ese código');
             if (err.constraint === 'users_username_key')
                 return AppError.conflict('Ese nombre de usuario ya está en uso');
+            if (err.constraint === 'roles_pkey')
+                return AppError.conflict('Ya existe un rol con ese código');
             return AppError.conflict('El registro ya existe (valor duplicado)');
         }
         case '23503': // foreign_key_violation
+            if (err.constraint === 'users_role_fkey')
+                return AppError.unprocessable('El rol indicado no existe o fue eliminado');
+            if (err.constraint === 'role_permissions_permission_code_fkey')
+                return AppError.unprocessable('Uno de los permisos indicados no existe');
             return AppError.badRequest('Referencia inválida: el registro relacionado no existe');
+        case '23001': // restrict_violation: bitácora de solo inserción (RN-0006)
+            return AppError.forbidden('La bitácora es de solo lectura y no puede modificarse');
         case '23514': {
             // check_violation
             if (err.constraint === 'customers_dpi_format')

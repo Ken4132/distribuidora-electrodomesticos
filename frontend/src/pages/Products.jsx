@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { productsApi } from '../services/api.js';
 import { useDebounce } from '../hooks/useDebounce.js';
 import { useToast } from '../context/ToastContext.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
 import { usePaymentModes } from '../hooks/usePaymentModes.js';
 import { Badge, EmptyState, Field, Modal, Pagination, SearchInput, Spinner } from '../components/ui.jsx';
 import { money } from '../utils/format.js';
@@ -10,7 +11,18 @@ const EMPTY = { code: '', name: '', description: '', category: 'General', brand:
 
 export default function Products() {
     const toast = useToast();
+    const { can } = useAuth();
     const { modes } = usePaymentModes();
+
+    // RN-0001 y RN-0002: el costo y los porcentajes solo se muestran a quien
+    // tiene el permiso. El backend además no los envía, así que aquí no hay
+    // nada que ocultar de más: simplemente no se pinta la columna.
+    const seeCost = can('products.cost.view');
+    const mayCreate = can('products.create');
+    const mayUpdate = can('products.update');
+    const mayStatus = can('products.status');
+    const mayStock = can('products.stock');
+    const hasActions = mayUpdate || mayStatus || mayStock;
     const [search, setSearch] = useState('');
     const [status, setStatus] = useState('active');
     const [lowStock, setLowStock] = useState(false);
@@ -21,9 +33,10 @@ export default function Products() {
     const debounced = useDebounce(search);
 
     // Texto de ayuda construido con las reglas que informa el backend.
-    const pricingHint = modes.length
-        ? `Los precios se calculan solos: ${modes.map((m) => `${m.label.toLowerCase()} +${m.markup_percent}%`).join(', ')}`
-        : 'Los precios de venta se calculan automáticamente a partir del costo';
+    const pricingHint =
+        seeCost && modes.length
+            ? `Los precios se calculan solos: ${modes.map((m) => `${m.label.toLowerCase()} +${m.markup_percent}%`).join(', ')}`
+            : 'Los precios de venta son los autorizados por la administración';
 
     const load = useCallback(async () => {
         setState((s) => ({ ...s, loading: true }));
@@ -66,9 +79,11 @@ export default function Products() {
                     <h1>Productos</h1>
                     <p className="page__sub">{pricingHint}</p>
                 </div>
-                <button className="btn btn--primary" onClick={() => setModal({ mode: 'create', data: EMPTY })}>
-                    Nuevo producto
-                </button>
+                {mayCreate && (
+                    <button className="btn btn--primary" onClick={() => setModal({ mode: 'create', data: EMPTY })}>
+                        Nuevo producto
+                    </button>
+                )}
             </div>
 
             <div className="toolbar">
@@ -96,13 +111,13 @@ export default function Products() {
                                 <th>Código</th>
                                 <th>Producto</th>
                                 <th>Categoría</th>
-                                <th className="right">Costo</th>
+                                {seeCost && <th className="right">Costo</th>}
                                 <th className="right">Contado</th>
                                 <th className="right">4 pagos</th>
                                 <th className="right">8 pagos</th>
                                 <th className="right">Stock</th>
                                 <th>Estado</th>
-                                <th className="right">Acciones</th>
+                                {hasActions && <th className="right">Acciones</th>}
                             </tr>
                         </thead>
                         <tbody>
@@ -114,7 +129,7 @@ export default function Products() {
                                         {p.brand && <span className="muted"> · {p.brand}</span>}
                                     </td>
                                     <td>{p.category}</td>
-                                    <td className="right muted">{money(p.cost)}</td>
+                                    {seeCost && <td className="right muted">{money(p.cost)}</td>}
                                     <td className="right">{money(p.price_cash)}</td>
                                     <td className="right">{money(p.price_credit_4)}</td>
                                     <td className="right">{money(p.price_credit_8)}</td>
@@ -126,20 +141,34 @@ export default function Products() {
                                             {p.is_active ? 'Activo' : 'Inactivo'}
                                         </Badge>
                                     </td>
-                                    <td className="right nowrap">
-                                        <button className="btn btn--ghost btn--sm" onClick={() => setStockModal(p)}>
-                                            Stock
-                                        </button>
-                                        <button
-                                            className="btn btn--ghost btn--sm"
-                                            onClick={() => setModal({ mode: 'edit', data: p })}
-                                        >
-                                            Editar
-                                        </button>
-                                        <button className="btn btn--ghost btn--sm" onClick={() => toggleActive(p)}>
-                                            {p.is_active ? 'Desactivar' : 'Activar'}
-                                        </button>
-                                    </td>
+                                    {hasActions && (
+                                        <td className="right nowrap">
+                                            {mayStock && (
+                                                <button
+                                                    className="btn btn--ghost btn--sm"
+                                                    onClick={() => setStockModal(p)}
+                                                >
+                                                    Stock
+                                                </button>
+                                            )}
+                                            {mayUpdate && (
+                                                <button
+                                                    className="btn btn--ghost btn--sm"
+                                                    onClick={() => setModal({ mode: 'edit', data: p })}
+                                                >
+                                                    Editar
+                                                </button>
+                                            )}
+                                            {mayStatus && (
+                                                <button
+                                                    className="btn btn--ghost btn--sm"
+                                                    onClick={() => toggleActive(p)}
+                                                >
+                                                    {p.is_active ? 'Desactivar' : 'Activar'}
+                                                </button>
+                                            )}
+                                        </td>
+                                    )}
                                 </tr>
                             ))}
                         </tbody>
@@ -186,11 +215,12 @@ function ProductModal({ mode, initial, onClose, onSaved }) {
     // Vista previa de precios. Los porcentajes NO están escritos aquí: vienen
     // del backend (/api/sales/payment-modes), que es la única fuente de la
     // regla comercial. Al guardar, el precio definitivo lo calcula la BD.
+    // `markup` solo llega a quien puede ver costos (RN-0001). Sin él no se
+    // puede ni se debe calcular la vista previa.
     const cost = Number(form.cost) || 0;
-    const preview = modes.map((m) => ({
-        ...m,
-        price: Math.round(cost * (1 + m.markup) * 100) / 100,
-    }));
+    const preview = modes
+        .filter((m) => typeof m.markup === 'number')
+        .map((m) => ({ ...m, price: Math.round(cost * (1 + m.markup) * 100) / 100 }));
 
     async function submit(e) {
         e.preventDefault();
@@ -267,7 +297,7 @@ function ProductModal({ mode, initial, onClose, onSaved }) {
                     <textarea className="input" rows={2} value={form.description ?? ''} onChange={set('description')} />
                 </Field>
 
-                <div className="price-preview span-3">
+                <div className="price-preview span-3" hidden={preview.length === 0}>
                     <span className="price-preview__title">Precios de venta calculados</span>
                     <div className="price-preview__row">
                         {preview.map((m) => (

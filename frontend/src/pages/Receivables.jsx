@@ -2,12 +2,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { paymentsApi, salesApi } from '../services/api.js';
 import { useToast } from '../context/ToastContext.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
 import { Badge, EmptyState, Pagination, Spinner } from '../components/ui.jsx';
 import { ACCOUNT_STATUS_LABELS, formatDate, METHOD_LABELS, money } from '../utils/format.js';
 import { PaymentModal } from './SaleDetail.jsx';
 
 export default function Receivables() {
     const toast = useToast();
+    const { can } = useAuth();
+    // El backend informa si la cartera devuelta es la completa o solo la
+    // propia; el encabezado lo refleja para que nadie crea que está viendo
+    // toda la cartera de la empresa.
+    const [scope, setScope] = useState(null);
     const [tab, setTab] = useState('pendientes');
     const [status, setStatus] = useState('');
     const [page, setPage] = useState(1);
@@ -22,6 +28,7 @@ export default function Receivables() {
                     ? await paymentsApi.receivables({ status, page, pageSize: 15 })
                     : await paymentsApi.list({ page, pageSize: 15 });
             setState({ loading: false, rows: res.data, pagination: res.pagination });
+            if (tab === 'pendientes') setScope(res.scope ?? null);
         } catch (e) {
             setState({ loading: false, rows: [], pagination: null });
             toast.error(e.message);
@@ -48,8 +55,12 @@ export default function Receivables() {
         <div className="page">
             <div className="page__head">
                 <div>
-                    <h1>Cobranza</h1>
-                    <p className="page__sub">Cuentas por cobrar y pagos recibidos</p>
+                    <h1>{scope === 'propia' ? 'Tu cartera' : 'Cobranza'}</h1>
+                    <p className="page__sub">
+                        {scope === 'propia'
+                            ? 'Créditos que registraste y los pagos recibidos'
+                            : 'Cuentas por cobrar y pagos recibidos'}
+                    </p>
                 </div>
             </div>
 
@@ -126,9 +137,14 @@ export default function Receivables() {
                                         <Badge status={s.account_status}>{ACCOUNT_STATUS_LABELS[s.account_status]}</Badge>
                                     </td>
                                     <td className="right">
-                                        <button className="btn btn--sm btn--primary" onClick={() => openPayment(s.id)}>
-                                            Cobrar
-                                        </button>
+                                        {can('payments.create', 'payments.create.own') && (
+                                            <button
+                                                className="btn btn--sm btn--primary"
+                                                onClick={() => openPayment(s.id)}
+                                            >
+                                                Cobrar
+                                            </button>
+                                        )}
                                     </td>
                                 </tr>
                             ))}

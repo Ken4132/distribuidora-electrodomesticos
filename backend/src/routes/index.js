@@ -5,9 +5,14 @@ import productRoutes from './product.routes.js';
 import saleRoutes from './sale.routes.js';
 import paymentRoutes from './payment.routes.js';
 import integrationRoutes from './integration.routes.js';
+import userRoutes from './user.routes.js';
+import roleRoutes from './role.routes.js';
+import auditRoutes from './audit.routes.js';
 import { query } from '../config/db.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { requireAuth } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
+import { receivablesScope, ownPortfolioFilter } from '../services/scope.service.js';
 import { today } from '../utils/dates.js';
 
 const router = Router();
@@ -26,12 +31,16 @@ router.use('/products', productRoutes);
 router.use('/sales', saleRoutes);
 router.use('/payments', paymentRoutes);
 router.use('/integrations', integrationRoutes);
+router.use('/users', userRoutes);
+router.use('/roles', roleRoutes);
+router.use('/audit', auditRoutes);
 
 /** Resumen operativo para la pantalla de inicio. */
 router.get(
     '/dashboard',
     requireAuth,
-    asyncHandler(async (_req, res) => {
+    requirePermission('dashboard.view', { module: 'dashboard' }),
+    asyncHandler(async (req, res) => {
         const [customers, products, sales, receivables] = await Promise.all([
             query('SELECT COUNT(*)::int AS total, COUNT(*) FILTER (WHERE is_active)::int AS active FROM customers'),
             query(
@@ -46,11 +55,24 @@ router.get(
                         COALESCE(SUM(total) FILTER (WHERE sale_date = app_today()), 0)::numeric(12,2) AS today_amount
                    FROM v_sales WHERE status = 'activa'`
             ),
-            query(
-                `SELECT COALESCE(SUM(balance), 0)::numeric(12,2) AS total_balance,
-                        COUNT(*) FILTER (WHERE account_status = 'vencida')::int AS overdue_sales
-                   FROM v_sales WHERE status = 'activa' AND balance > 0`
-            ),
+            // La tarjeta "Por cobrar" respeta el alcance del usuario: si solo
+            // tiene cartera propia, el total del panel no puede contradecir a
+            // la pantalla de Cobranza.
+            (async () => {
+                const scope = await receivablesScope(req.user);
+                if (!scope) return { rows: [{ total_balance: '0.00', overdue_sales: 0 }] };
+
+                const params = [];
+                const filters = ["status = 'activa'", 'balance > 0'];
+                if (!scope.global) filters.push(ownPortfolioFilter(scope, params));
+
+                return query(
+                    `SELECT COALESCE(SUM(balance), 0)::numeric(12,2) AS total_balance,
+                            COUNT(*) FILTER (WHERE account_status = 'vencida')::int AS overdue_sales
+                       FROM v_sales WHERE ${filters.join(' AND ')}`,
+                    params
+                );
+            })(),
         ]);
 
         res.json({

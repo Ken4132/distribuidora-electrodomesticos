@@ -15,10 +15,25 @@ import {
     todayIso,
 } from '../utils/format.js';
 
+/**
+ * ¿Este usuario puede cobrar ESTA venta? (regla U6)
+ *
+ * Con `payments.create` puede cobrar cualquiera. Con `payments.create.own`
+ * solo los créditos que él mismo registró. Ocultar el botón es comodidad:
+ * el servidor vuelve a comprobarlo dentro de la transacción.
+ */
+export function puedeCobrar(sale, user, can) {
+    if (can('payments.create')) return true;
+    if (!can('payments.create.own')) return false;
+    const esSuya = sale?.created_by != null && Number(sale.created_by) === Number(user?.id);
+    const esCredito = sale?.payment_mode === 'credito_4' || sale?.payment_mode === 'credito_8';
+    return esSuya && esCredito;
+}
+
 export default function SaleDetail() {
     const { id } = useParams();
     const toast = useToast();
-    const { user } = useAuth();
+    const { user, can } = useAuth();
     const [sale, setSale] = useState(null);
     const [error, setError] = useState('');
     const [payOpen, setPayOpen] = useState(false);
@@ -61,12 +76,12 @@ export default function SaleDetail() {
                     </p>
                 </div>
                 <div className="row-actions">
-                    {hasBalance && (
+                    {hasBalance && puedeCobrar(sale, user, can) && (
                         <button className="btn btn--primary" onClick={() => setPayOpen(true)}>
                             Registrar pago
                         </button>
                     )}
-                    {user?.role === 'admin' && sale.status === 'activa' && Number(sale.paid_amount) === 0 && (
+                    {can('sales.cancel') && sale.status === 'activa' && Number(sale.paid_amount) === 0 && (
                         <button className="btn btn--ghost" onClick={() => setCancelOpen(true)}>
                             Anular venta
                         </button>

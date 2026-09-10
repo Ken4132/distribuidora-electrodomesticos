@@ -29,7 +29,15 @@ export function requireAuth(req, _res, next) {
     }
 }
 
-/** Restringe una ruta a determinados roles. Usar después de requireAuth. */
+/**
+ * Restringe una ruta a determinados roles.
+ *
+ * OBSOLETO para rutas nuevas: desde REQ-0011 el control de acceso se hace
+ * por PERMISO (`requirePermission` en middleware/permissions.js), no por rol
+ * fijo, para que el administrador pueda cambiar los accesos sin tocar código.
+ * Se conserva porque sigue siendo la forma correcta de proteger algo que
+ * dependa de la identidad del rol y no de un permiso concreto.
+ */
 export function requireRole(...roles) {
     return (req, _res, next) => {
         if (!req.user) return next(AppError.unauthorized());

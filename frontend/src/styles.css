@@ -874,3 +874,70 @@ h2 {
     overflow: auto;
     white-space: pre;
 }
+
+/* ------------------------------------------------------------------
+   Seguridad: roles, permisos y bitácora (REQ-0010, REQ-0011, REQ-0016)
+   ------------------------------------------------------------------ */
+
+.topbar__role {
+    font-style: normal;
+    opacity: 0.65;
+    font-size: 0.85em;
+}
+
+.perm-group {
+    margin-top: 1rem;
+}
+
+.perm-group__title {
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0.6;
+    margin: 0 0 0.4rem;
+}
+
+.perm-group__items {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 0.35rem 1rem;
+}
+
+.perm-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.4rem;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+.perm-item:hover {
+    background: rgba(127, 127, 127, 0.08);
+}
+
+.perm-item input[disabled] {
+    cursor: not-allowed;
+}
+
+.perm-item__code {
+    margin-left: auto;
+    font-size: 0.72rem;
+    opacity: 0.5;
+    white-space: nowrap;
+}
+
+.row--clickable {
+    cursor: pointer;
+}
+
+.audit-details {
+    margin: 0.5rem 0 0;
+    padding: 0.6rem 0.8rem;
+    background: rgba(127, 127, 127, 0.1);
+    border-radius: var(--radius);
+    font-size: 0.78rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+}

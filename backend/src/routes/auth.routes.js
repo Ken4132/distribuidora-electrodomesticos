@@ -2,8 +2,8 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import * as ctrl from '../controllers/auth.controller.js';
 import { validate } from '../middleware/validate.js';
-import { requireAuth, requireRole } from '../middleware/auth.js';
-import { loginSchema, createUserSchema } from '../validators/auth.schema.js';
+import { requireAuth } from '../middleware/auth.js';
+import { loginSchema } from '../validators/auth.schema.js';
 
 const router = Router();
 
@@ -18,6 +18,11 @@ const loginLimiter = rateLimit({
 
 router.post('/login', loginLimiter, validate({ body: loginSchema }), ctrl.login);
 router.get('/me', requireAuth, ctrl.me);
-router.post('/users', requireAuth, requireRole('admin'), validate({ body: createUserSchema }), ctrl.createUser);
+router.post('/logout', requireAuth, ctrl.logout);
+
+// La creación de usuarios vivía aquí como POST /auth/users. Se movió a su
+// propio módulo (POST /api/users) al implementar REQ-0010 y REQ-0011, para
+// que la administración de cuentas tenga un solo lugar y quede protegida por
+// el permiso `users.manage` en vez de por un rol fijo.
 
 export default router;

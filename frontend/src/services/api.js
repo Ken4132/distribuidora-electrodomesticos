@@ -87,6 +87,32 @@ export const api = {
 export const authApi = {
     login: (username, password) => api.post('/auth/login', { username, password }),
     me: () => api.get('/auth/me'),
+    logout: () => api.post('/auth/logout'),
+    changeOwnPassword: (current_password, password) =>
+        api.post('/users/me/password', { current_password, password }),
+};
+
+export const usersApi = {
+    list: (params) => api.get('/users', params),
+    get: (id) => api.get(`/users/${id}`),
+    create: (data) => api.post('/users', data),
+    update: (id, data) => api.put(`/users/${id}`, data),
+    setActive: (id, isActive) => api.patch(`/users/${id}/status`, { is_active: isActive }),
+    resetPassword: (id, password) => api.post(`/users/${id}/password`, { password }),
+};
+
+export const rolesApi = {
+    list: () => api.get('/roles'),
+    permissions: () => api.get('/roles/permissions'),
+    get: (code) => api.get(`/roles/${code}`),
+    create: (data) => api.post('/roles', data),
+    update: (code, data) => api.put(`/roles/${code}`, data),
+    setPermissions: (code, permissions) => api.put(`/roles/${code}/permissions`, { permissions }),
+};
+
+export const auditApi = {
+    list: (params) => api.get('/audit', params),
+    filters: () => api.get('/audit/filters'),
 };
 
 export const customersApi = {

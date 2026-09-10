@@ -314,12 +314,99 @@ interfaz todavía no tiene mapa. Está listo para integrarlo después.
 
 ## 7. Usuarios y acceso
 
-### U1 — Dos roles ⚠️ ASUMIDA
+### U1 — Cinco perfiles ✅ DEFINIDA (tesis, Tabla 6)
 
-| Rol | Puede |
-| --- | ----- |
-| `vendedor` | Todo el flujo operativo: clientes, productos, ventas, pagos |
-| `admin` | Lo anterior + anular ventas, anular pagos y crear usuarios |
+Sustituye a la versión anterior de esta regla, que asumía dos roles. Los
+perfiles son los cinco actores con acceso al sistema de la Tabla 6:
+
+| Rol | Nombre | Alcance | Evidencia |
+| --- | ------ | ------- | --------- |
+| `admin` | Administrador | Todo | Tabla 6; actor único de CUP-05; RN-0004 |
+| `vendedor` | Ventas | Clientes, catálogo (sin costos), ventas, y **cobranza de su propia cartera** | Tabla 6; CUP-01; §1.6.3 |
+| `cobrador` | Cobrador | Consulta de clientes y ventas, **cobranza completa** | Tabla 6; CUP-03; §1.6.3 |
+| `verificador` | Verificador | Consulta de clientes y ventas. Sus permisos propios llegan con REQ-0004 | Tabla 6; CUP-02 pasos 4-5 |
+| `gerencia` | Gerencia | Solo el panel de inicio. Los reportes llegan con REQ-0013 | Tabla 6; CUP-04 |
+
+El sexto actor de la Tabla 6, **Cliente**, no es un rol del sistema: la propia
+tabla lo describe como actor externo que *"no accede directamente al sistema"*.
+
+Desde la migración `003` los roles y sus permisos **son datos, no código**:
+viven en las tablas `roles`, `permissions` y `role_permissions`, y el
+administrador los cambia desde la pantalla de usuarios sin tocar el sistema
+(REQ-0011). El cambio surte efecto de inmediato, sin reiniciar.
+
+Sobre el §1.6.3, que menciona *"tres perfiles principales"*: no contradice a
+la Tabla 6. Dice **principales**, no únicos, y describe los tres del trabajo
+diario. Verificador y Gerencia aparecen como actores en CUP-02 y CUP-04, y la
+Tabla 6 les asigna módulos de acceso, a diferencia de Cliente.
+
+> **Pendiente en la tesis.** La Tabla 6 atribuye a Gerencia *"autoriza
+> créditos especiales"*, pero RN-0004 da la aprobación a la administración,
+> CUP-02 no lista a Gerencia como actor y CUP-04 es de solo consulta. Mientras
+> no exista evidencia de ese proceso, Gerencia es un perfil de consulta y
+> supervisión. Queda documentado para corregirlo en el documento.
+
+### U6 — El vendedor cobra su propia cartera ⚠️ ASUMIDA
+
+**Procede de la operación real de la empresa, no del documento.** La tesis
+sitúa el registro de pagos en el Cobrador y el Administrador en cinco lugares
+(Tabla 6, §1.6.3, Figura 7, CUP-03 y §4.2.3), y al Vendedor le da únicamente
+*"consulta del estado de las cuentas por cobrar asociadas a sus operaciones"*.
+El propietario del proyecto confirmó que en la práctica el vendedor también
+cobra a los clientes a quienes vendió a crédito. **Hay que reflejarlo en el
+documento** (§1.6.3, Tabla 6 y CUP-03).
+
+Se implementa con permisos de alcance:
+
+| Permiso | Qué permite |
+| ------- | ----------- |
+| `payments.create` | Cobrar cualquier venta |
+| `payments.create.own` | Cobrar **solo ventas a crédito** cuyo `created_by` sea el propio usuario |
+| `receivables.view` | Consultar la cartera completa |
+| `receivables.view.own` | Consultar **solo los créditos propios** |
+
+Reglas de aplicación:
+
+1. **El permiso global implica al propio.** Quien tiene los dos se comporta
+   como global. `.own` es un subconjunto estricto: nunca amplía nada.
+2. **Cartera propia = ventas a crédito con `sales.created_by` igual al
+   usuario.** Las ventas de contado quedan fuera del alcance propio.
+3. **Una venta con `created_by` nulo no es de nadie.** Ocurre si se elimina la
+   cuenta que la registró (`ON DELETE SET NULL`); solo la cobra quien tenga el
+   permiso global.
+4. **La comprobación es del servidor y va dentro de la transacción**, sobre la
+   misma fila que ya queda bloqueada con `FOR UPDATE`. Ocultar el botón en la
+   interfaz es comodidad, no protección.
+5. **Cobrar una venta ajena devuelve 403** con un mensaje claro y deja entrada
+   en la bitácora con `result = 'denegado'`.
+6. **El alcance no llega a la anulación.** `payments.void` sigue siendo
+   exclusivo del administrador, también sobre la cartera propia: cobrar y
+   corregir un cobro son cosas distintas.
+7. **No existe reasignación de cartera.** La cartera se deriva de quién
+   registró la venta; no hay traspaso.
+
+### U3 — El costo solo lo ve el administrador ✅ DEFINIDA (RN-0001, RN-0002)
+
+El campo `cost` de los productos y el `unit_cost` del detalle de venta **no
+salen del servidor** hacia quien no tenga el permiso `products.cost.view`. No
+se envían en cero ni vacíos: se eliminan de la respuesta. Tampoco viajan los
+porcentajes 30/50/70, porque publicar el porcentaje junto al precio de venta
+equivale a publicar el costo.
+
+### U4 — Todo queda en la bitácora ✅ DEFINIDA (REQ-0016, RN-0007)
+
+Se registran los inicios de sesión (correctos y fallidos), los accesos
+denegados y las altas, cambios y bajas de clientes, productos, ventas, pagos,
+usuarios y roles. La bitácora **no se puede modificar ni borrar**: un
+disparador de la base de datos rechaza cualquier `UPDATE` o `DELETE`
+(RN-0006). No se registran contraseñas ni hashes.
+
+### U5 — El sistema nunca se queda sin administrador ⚠️ ASUMIDA
+
+No se puede desactivar la propia cuenta, ni cambiarse el propio rol, ni dejar
+sin permisos de administración al rol `admin`, ni quitar el último
+administrador activo. La tesis no lo dice; es una salvaguarda para que el
+sistema no quede inutilizable.
 
 ### U2 — Sesión de 8 horas ⚠️ ASUMIDA
 
@@ -356,3 +443,6 @@ real y señala lo que hay que cambiar.
 | CL2 | El teléfono debe ser **guatemalteco de 8 dígitos** | |
 | CL4 | **No** se puede desactivar un cliente con saldo | |
 | U2 | La sesión dura **8 horas** | |
+| U5 | No se puede quitar al **último administrador activo** | |
+| U6 | El vendedor cobra **solo los créditos que él registró** | |
+| U6 | Las ventas de **contado** NO entran en la cartera propia del vendedor | |

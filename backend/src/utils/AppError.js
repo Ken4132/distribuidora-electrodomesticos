@@ -18,8 +18,8 @@ export class AppError extends Error {
     static unauthorized(msg = 'No autenticado') {
         return new AppError(msg, 401, 'UNAUTHORIZED');
     }
-    static forbidden(msg = 'No autorizado para esta operación') {
-        return new AppError(msg, 403, 'FORBIDDEN');
+    static forbidden(msg = 'No autorizado para esta operación', details) {
+        return new AppError(msg, 403, 'FORBIDDEN', details);
     }
     static notFound(msg = 'Recurso no encontrado') {
         return new AppError(msg, 404, 'NOT_FOUND');

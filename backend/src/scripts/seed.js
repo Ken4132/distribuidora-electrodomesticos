@@ -53,11 +53,45 @@ async function seedAdmin(client) {
     }
 }
 
+/**
+ * Usuarios de prueba, uno por cada perfil de la Tabla 6 de la tesis.
+ * Sirven para comprobar en la práctica RN-0001 (el vendedor no ve costos),
+ * RN-0008 (cada rol entra solo a lo suyo) y la regla U6 (el vendedor solo
+ * cobra su propia cartera). Solo en desarrollo.
+ */
+const DEMO_USERS = [
+    { username: 'vendedor', full_name: 'Vendedor de Prueba', role: 'vendedor' },
+    // Un segundo vendedor: sin él no se puede comprobar que un vendedor NO
+    // pueda cobrar la cartera de otro.
+    { username: 'vendedor2', full_name: 'Segundo Vendedor de Prueba', role: 'vendedor' },
+    { username: 'cobrador', full_name: 'Cobrador de Prueba', role: 'cobrador' },
+    { username: 'verificador', full_name: 'Verificador de Prueba', role: 'verificador' },
+    { username: 'gerencia', full_name: 'Gerencia de Prueba', role: 'gerencia' },
+];
+
+async function seedDemoUsers(client) {
+    const password = 'Prueba123';
+    for (const u of DEMO_USERS) {
+        const { rows } = await client.query('SELECT id FROM users WHERE lower(username) = lower($1)', [
+            u.username,
+        ]);
+        if (rows.length) continue;
+        const hash = await bcrypt.hash(password, 10);
+        await client.query(
+            `INSERT INTO users (username, full_name, password_hash, role) VALUES ($1,$2,$3,$4)`,
+            [u.username, u.full_name, hash, u.role]
+        );
+        console.log(`[seed] Usuario de prueba creado: ${u.username} / ${password} (rol ${u.role})`);
+    }
+}
+
 async function seedDemo(client) {
     if (config.isProd) {
         console.log('[seed] Entorno de producción: se omiten los datos de demostración.');
         return;
     }
+
+    await seedDemoUsers(client);
 
     for (const c of DEMO_CUSTOMERS) {
         await client.query(

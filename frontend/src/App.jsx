@@ -15,6 +15,8 @@ import Sales from './pages/Sales.jsx';
 import SaleDetail from './pages/SaleDetail.jsx';
 import Receivables from './pages/Receivables.jsx';
 import Integrations from './pages/Integrations.jsx';
+import Users from './pages/Users.jsx';
+import Audit from './pages/Audit.jsx';
 
 export default function App() {
     return (
@@ -38,8 +40,38 @@ export default function App() {
                                 <Route path="/ventas" element={<Sales />} />
                                 <Route path="/ventas/nueva" element={<NewSale />} />
                                 <Route path="/ventas/:id" element={<SaleDetail />} />
-                                <Route path="/cobranza" element={<Receivables />} />
-                                <Route path="/integraciones" element={<Integrations />} />
+                                <Route
+                                    path="/cobranza"
+                                    element={
+                                        <ProtectedRoute permission={['receivables.view', 'receivables.view.own']}>
+                                            <Receivables />
+                                        </ProtectedRoute>
+                                    }
+                                />
+                                <Route
+                                    path="/usuarios"
+                                    element={
+                                        <ProtectedRoute permission="users.view">
+                                            <Users />
+                                        </ProtectedRoute>
+                                    }
+                                />
+                                <Route
+                                    path="/bitacora"
+                                    element={
+                                        <ProtectedRoute permission="audit.view">
+                                            <Audit />
+                                        </ProtectedRoute>
+                                    }
+                                />
+                                <Route
+                                    path="/integraciones"
+                                    element={
+                                        <ProtectedRoute permission="integrations.manage">
+                                            <Integrations />
+                                        </ProtectedRoute>
+                                    }
+                                />
                             </Route>
                             <Route path="*" element={<Navigate to="/" replace />} />
                         </Routes>
