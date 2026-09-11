@@ -253,10 +253,10 @@ async function run() {
         (porModelo.body?.data ?? []).some((p) => p.id === producto.body?.data?.id));
 
     const desglose = await api('GET', `/products/${productoId}/inventory`, null, admin);
-    const total = (desglose.body?.data ?? []).reduce((s, r) => s + Number(r.quantity), 0);
+    const total = (desglose.body?.data?.branches ?? []).reduce((s, r) => s + Number(r.quantity), 0);
     check('El stock inicial aparece en el inventario por sucursal', total === 10, `total=${total}`);
     check('El stock inicial se imputa a la sucursal predeterminada',
-        (desglose.body?.data ?? []).find((r) => Number(r.quantity) === 10)?.branch_id === predeterminada[0]?.id);
+        (desglose.body?.data?.branches ?? []).find((r) => Number(r.quantity) === 10)?.branch_id === predeterminada[0]?.id);
 
     const ajuste = await api('POST', '/inventory/adjust', {
         product_id: productoId,
