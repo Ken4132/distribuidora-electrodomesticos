@@ -47,6 +47,17 @@ const phone = z
     .nullable()
     .optional();
 
+/**
+ * Sucursal del usuario. Opcional y anulable: un administrador o un perfil
+ * de gerencia pueden no pertenecer a ningún local. `null` significa
+ * explícitamente "sin sucursal".
+ *
+ * El nombre del usuario NO se normaliza como texto de negocio: es el nombre
+ * de una cuenta, se copia tal cual a la bitácora y debe leerse igual que lo
+ * escribió el administrador.
+ */
+const branchId = z.coerce.number().int().positive('Sucursal inválida').nullable().optional();
+
 export const createUserSchema = z
     .object({
         username,
@@ -55,6 +66,7 @@ export const createUserSchema = z
         phone,
         password,
         role: roleCode.default('vendedor'),
+        branch_id: branchId,
     })
     .strict();
 
@@ -65,8 +77,12 @@ export const updateUserSchema = z
         email,
         phone,
         role: roleCode.optional(),
+        branch_id: branchId,
     })
     .strict();
+
+/** Asignación de sucursal desde la pantalla de Usuarios. */
+export const assignBranchSchema = z.object({ branch_id: branchId }).strict();
 
 /** Restablecimiento hecho por un administrador sobre otra cuenta. */
 export const changePasswordSchema = z.object({ password }).strict();
@@ -87,6 +103,7 @@ export const listUsersSchema = pagination.extend({
     search: z.string().trim().max(100).default(''),
     role: z.string().trim().max(20).default(''),
     status: z.enum(['all', 'active', 'inactive']).default('all'),
+    branch_id: z.coerce.number().int().positive().optional(),
 });
 
 export const setUserActiveSchema = z.object({ is_active: z.boolean() }).strict();

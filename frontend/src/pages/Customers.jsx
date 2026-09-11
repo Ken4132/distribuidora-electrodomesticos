@@ -14,6 +14,8 @@ const EMPTY = {
     email: '',
     address: '',
     address_ref: '',
+    municipality: '',
+    department: '',
     notes: '',
 };
 
@@ -171,6 +173,8 @@ function CustomerModal({ mode, initial, onClose, onSaved }) {
                 email: form.email || '',
                 address: form.address,
                 address_ref: form.address_ref || '',
+                municipality: form.municipality || '',
+                department: form.department || '',
                 notes: form.notes || '',
             };
             if (mode === 'create') {
@@ -209,6 +213,12 @@ function CustomerModal({ mode, initial, onClose, onSaved }) {
                 </Field>
                 <Field label="Dirección" required error={errors.address} className="span-3">
                     <input className="input" value={form.address} onChange={set('address')} />
+                </Field>
+                <Field label="Municipio" error={errors.municipality} className="span-1">
+                    <input className="input" value={form.municipality ?? ''} onChange={set('municipality')} />
+                </Field>
+                <Field label="Departamento" error={errors.department} className="span-1">
+                    <input className="input" value={form.department ?? ''} onChange={set('department')} />
                 </Field>
                 <Field label="Punto de referencia" error={errors.address_ref} className="span-3">
                     <input className="input" value={form.address_ref ?? ''} onChange={set('address_ref')} />

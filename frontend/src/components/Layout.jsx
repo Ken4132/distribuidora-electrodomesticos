@@ -16,6 +16,10 @@ const LINKS = [
     // Cobranza la ven tanto quien consulta la cartera completa como quien
     // solo consulta la suya.
     { to: '/cobranza', label: 'Cobranza', permission: ['receivables.view', 'receivables.view.own'] },
+    { to: '/catalogo', label: 'Catálogo', permission: 'products.view' },
+    // Cobranza e Inventario admiten los dos alcances: el global y el propio.
+    { to: '/inventario', label: 'Inventario', permission: ['inventory.view', 'inventory.view.own'] },
+    { to: '/sucursales', label: 'Sucursales', permission: 'branches.view' },
     { to: '/usuarios', label: 'Usuarios', permission: 'users.view' },
     { to: '/bitacora', label: 'Bitácora', permission: 'audit.view' },
     { to: '/integraciones', label: 'Integraciones', permission: 'integrations.manage' },

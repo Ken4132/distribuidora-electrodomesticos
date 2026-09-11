@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { usersApi, rolesApi } from '../services/api.js';
+import { usersApi, rolesApi, branchesApi } from '../services/api.js';
 import { useDebounce } from '../hooks/useDebounce.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { Badge, EmptyState, Field, Modal, Pagination, SearchInput, Spinner } from '../components/ui.jsx';
 import { formatDate } from '../utils/format.js';
 
-const EMPTY = { username: '', full_name: '', email: '', phone: '', password: '', role: 'vendedor' };
+const EMPTY = { username: '', full_name: '', email: '', phone: '', password: '', role: 'vendedor', branch_id: '' };
 
 /**
  * REQ-0010 Gestión de usuarios y REQ-0011 Gestión de roles y permisos.
@@ -119,6 +119,7 @@ export default function Users() {
                                 <th>Usuario</th>
                                 <th>Nombre</th>
                                 <th>Rol</th>
+                                <th>Sucursal</th>
                                 <th>Correo</th>
                                 <th>Último ingreso</th>
                                 <th>Estado</th>
@@ -134,6 +135,9 @@ export default function Users() {
                                         {u.id === me?.id && <span className="muted"> (tú)</span>}
                                     </td>
                                     <td>{u.role_name ?? u.role}</td>
+                                    <td>
+                                        {u.branch_name ?? <span className="muted">sin asignar</span>}
+                                    </td>
                                     <td className="truncate">{u.email ?? '—'}</td>
                                     <td>{u.last_login_at ? formatDate(u.last_login_at) : 'nunca'}</td>
                                     <td>
@@ -217,10 +221,20 @@ export default function Users() {
 
 function UserForm({ mode, initial, roles, onDone }) {
     const toast = useToast();
-    const [form, setForm] = useState({ ...EMPTY, ...initial, password: '' });
+    const [form, setForm] = useState({ ...EMPTY, ...initial, branch_id: initial?.branch_id ?? '', password: '' });
     const [errors, setErrors] = useState({});
     const [saving, setSaving] = useState(false);
+    const [branches, setBranches] = useState([]);
     const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+    // El selector solo aparece si quien edita puede consultar sucursales; si
+    // no tiene el permiso, la petición falla y el campo se queda fuera.
+    useEffect(() => {
+        branchesApi
+            .list({ status: 'active' })
+            .then((res) => setBranches(res.data))
+            .catch(() => setBranches([]));
+    }, []);
 
     async function submit(e) {
         e.preventDefault();
@@ -233,6 +247,7 @@ function UserForm({ mode, initial, roles, onDone }) {
                     email: form.email || '',
                     phone: form.phone || '',
                     role: form.role,
+                    branch_id: form.branch_id === '' ? null : Number(form.branch_id),
                 });
                 toast.success('Usuario actualizado');
             } else {
@@ -243,6 +258,7 @@ function UserForm({ mode, initial, roles, onDone }) {
                     phone: form.phone || '',
                     password: form.password,
                     role: form.role,
+                    branch_id: form.branch_id === '' ? null : Number(form.branch_id),
                 });
                 toast.success('Usuario creado');
             }
@@ -283,6 +299,23 @@ function UserForm({ mode, initial, roles, onDone }) {
                         ))}
                 </select>
             </Field>
+            {branches.length > 0 && (
+                <Field
+                    label="Sucursal"
+                    error={errors.branch_id}
+                    hint="Opcional. Administración y gerencia pueden no pertenecer a ningún local."
+                    className="span-1"
+                >
+                    <select className="input input--select" value={form.branch_id ?? ''} onChange={set('branch_id')}>
+                        <option value="">Sin asignar</option>
+                        {branches.map((b) => (
+                            <option key={b.id} value={b.id}>
+                                {b.name}
+                            </option>
+                        ))}
+                    </select>
+                </Field>
+            )}
             {mode !== 'edit' && (
                 <Field
                     label="Contraseña"

@@ -1,7 +1,9 @@
 import { query } from '../config/db.js';
+import { normalizeSearch, normalizeDpi } from '../utils/normalize.js';
 
 const FIELDS = `id, dpi, full_name, phone, phone_alt, email, address, address_ref,
-                latitude, longitude, notes, is_active, created_at, updated_at`;
+                municipality, department, latitude, longitude, notes,
+                is_active, created_at, updated_at`;
 
 /**
  * Listado con búsqueda y paginación.
@@ -13,9 +15,32 @@ export async function list({ search = '', status = 'all', page = 1, pageSize = 2
     const params = [];
 
     if (search) {
-        params.push(`%${search.toLowerCase()}%`);
-        const p = `$${params.length}`;
-        filters.push(`(lower(full_name) LIKE ${p} OR dpi LIKE ${p} OR phone LIKE ${p})`);
+        // La consulta se lleva a la MISMA forma canónica con la que se guardó
+        // el nombre. Por eso "josé lópez", "JOSE LOPEZ" y "  José   López "
+        // encuentran el mismo cliente.
+        //
+        // El nombre se compara contra `normalize_business_text(full_name)` y
+        // no contra la columna a secas: así la búsqueda sigue funcionando
+        // aunque alguna fila entrara sin normalizar por un camino externo.
+        params.push(`%${normalizeSearch(search)}%`);
+        const name = `$${params.length}`;
+
+        // DPI y teléfono son numéricos: se limpian de guiones y espacios para
+        // que "1234-56789-0101" encuentre al cliente igual que
+        // "1234567890101". Solo se añade el filtro si la consulta trae algún
+        // dígito, para no mandar un parámetro que la consulta no usa.
+        const digits = normalizeDpi(search);
+        let digitFilter = '';
+        if (digits) {
+            params.push(`%${digits}%`);
+            digitFilter = ` OR dpi LIKE $${params.length} OR phone LIKE $${params.length}`;
+        }
+
+        filters.push(
+            `(normalize_business_text(full_name) LIKE ${name}
+              OR normalize_business_text(COALESCE(municipality, '')) LIKE ${name}
+              OR normalize_business_text(COALESCE(department, '')) LIKE ${name}${digitFilter})`
+        );
     }
     if (status === 'active') filters.push('is_active = TRUE');
     if (status === 'inactive') filters.push('is_active = FALSE');
@@ -55,8 +80,8 @@ export async function create(data, userId) {
     const { rows } = await query(
         `INSERT INTO customers
              (dpi, full_name, phone, phone_alt, email, address, address_ref,
-              latitude, longitude, notes, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+              municipality, department, latitude, longitude, notes, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          RETURNING ${FIELDS}`,
         [
             data.dpi,
@@ -66,6 +91,8 @@ export async function create(data, userId) {
             data.email ?? null,
             data.address,
             data.address_ref ?? null,
+            data.municipality ?? null,
+            data.department ?? null,
             data.latitude ?? null,
             data.longitude ?? null,
             data.notes ?? null,
@@ -83,11 +110,13 @@ export async function update(id, data) {
              phone       = COALESCE($4, phone),
              phone_alt   = $5,
              email       = $6,
-             address     = COALESCE($7, address),
-             address_ref = $8,
-             latitude    = $9,
-             longitude   = $10,
-             notes       = $11
+             address      = COALESCE($7, address),
+             address_ref  = $8,
+             municipality = $9,
+             department   = $10,
+             latitude     = $11,
+             longitude    = $12,
+             notes        = $13
          WHERE id = $1
          RETURNING ${FIELDS}`,
         [
@@ -99,6 +128,8 @@ export async function update(id, data) {
             data.email ?? null,
             data.address ?? null,
             data.address_ref ?? null,
+            data.municipality ?? null,
+            data.department ?? null,
             data.latitude ?? null,
             data.longitude ?? null,
             data.notes ?? null,

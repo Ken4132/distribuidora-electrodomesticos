@@ -55,6 +55,33 @@ router.get(
     ctrl.stockMovements
 );
 
+/**
+ * Existencias del producto desglosadas por sucursal, como CONSULTA
+ * INFORMATIVA.
+ *
+ * Va con `products.view`, no con `inventory.view`: el vendedor tiene
+ * derecho a SABER que hay unidades en otra sucursal. Lo que la respuesta
+ * deja claro, fila por fila, es cuáles son operativas para él —solo las de
+ * su sucursal— y cuáles solo puede mirar.
+ */
+router.get(
+    '/:id/inventory',
+    requirePermission('products.view'),
+    validate({ params: idParam }),
+    ctrl.inventory
+);
+
+/**
+ * Histórico de costos. RN-0001: el costo a lo largo del tiempo es el mismo
+ * secreto que el costo actual, así que va detrás del mismo permiso.
+ */
+router.get(
+    '/:id/cost-history',
+    requirePermission('products.cost.view'),
+    validate({ params: idParam }),
+    ctrl.costHistory
+);
+
 router.put(
     '/:id',
     requirePermission('products.update'),

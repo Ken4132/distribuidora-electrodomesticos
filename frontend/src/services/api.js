@@ -99,7 +99,38 @@ export const usersApi = {
     update: (id, data) => api.put(`/users/${id}`, data),
     setActive: (id, isActive) => api.patch(`/users/${id}/status`, { is_active: isActive }),
     resetPassword: (id, password) => api.post(`/users/${id}/password`, { password }),
+    assignBranch: (id, branchId) => api.patch(`/users/${id}/branch`, { branch_id: branchId }),
 };
+
+export const branchesApi = {
+    list: (params) => api.get('/branches', params),
+    get: (id) => api.get(`/branches/${id}`),
+    create: (data) => api.post('/branches', data),
+    update: (id, data) => api.put(`/branches/${id}`, data),
+    setActive: (id, isActive) => api.patch(`/branches/${id}/status`, { is_active: isActive }),
+    makeDefault: (id) => api.patch(`/branches/${id}/default`),
+};
+
+export const inventoryApi = {
+    list: (params) => api.get('/inventory', params),
+    summary: () => api.get('/inventory/summary'),
+    mismatches: () => api.get('/inventory/mismatches'),
+    adjust: (data) => api.post('/inventory/adjust', data),
+    setMinStock: (data) => api.put('/inventory/min-stock', data),
+};
+
+/** Categorías y marcas comparten forma, así que comparten cliente. */
+const taxonomyApi = (base) => ({
+    list: (params) => api.get(`/${base}`, params),
+    get: (id) => api.get(`/${base}/${id}`),
+    create: (data) => api.post(`/${base}`, data),
+    update: (id, data) => api.put(`/${base}/${id}`, data),
+    setActive: (id, isActive) => api.patch(`/${base}/${id}/status`, { is_active: isActive }),
+});
+
+export const categoriesApi = taxonomyApi('categories');
+export const brandsApi = taxonomyApi('brands');
+export const catalogApi = { tree: () => api.get('/catalog/tree') };
 
 export const rolesApi = {
     list: () => api.get('/roles'),
@@ -134,6 +165,8 @@ export const productsApi = {
     setActive: (id, isActive) => api.patch(`/products/${id}/status`, { is_active: isActive }),
     adjustStock: (id, delta, reason) => api.post(`/products/${id}/stock`, { delta, reason }),
     movements: (id) => api.get(`/products/${id}/stock-movements`),
+    inventory: (id) => api.get(`/products/${id}/inventory`),
+    costHistory: (id) => api.get(`/products/${id}/cost-history`),
 };
 
 export const salesApi = {

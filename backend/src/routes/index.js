@@ -8,6 +8,9 @@ import integrationRoutes from './integration.routes.js';
 import userRoutes from './user.routes.js';
 import roleRoutes from './role.routes.js';
 import auditRoutes from './audit.routes.js';
+import branchRoutes from './branch.routes.js';
+import inventoryRoutes from './inventory.routes.js';
+import { categoryRoutes, brandRoutes, catalogRoutes } from './taxonomy.routes.js';
 import { query } from '../config/db.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { requireAuth } from '../middleware/auth.js';
@@ -34,6 +37,11 @@ router.use('/integrations', integrationRoutes);
 router.use('/users', userRoutes);
 router.use('/roles', roleRoutes);
 router.use('/audit', auditRoutes);
+router.use('/branches', branchRoutes);
+router.use('/inventory', inventoryRoutes);
+router.use('/categories', categoryRoutes);
+router.use('/brands', brandRoutes);
+router.use('/catalog', catalogRoutes);
 
 /** Resumen operativo para la pantalla de inicio. */
 router.get(

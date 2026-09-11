@@ -2,8 +2,21 @@ import * as service from '../services/user.service.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
 export const list = asyncHandler(async (req, res) => {
-    const result = await service.listUsers(req.validatedQuery);
+    const q = req.validatedQuery;
+    const result = await service.listUsers({ ...q, branchId: q.branch_id ?? null });
     res.json({ ok: true, ...result });
+});
+
+/** Asigna o quita la sucursal del usuario (`branch_id: null` la quita). */
+export const assignBranch = asyncHandler(async (req, res) => {
+    const user = await service.assignBranch(req.params.id, req.body.branch_id ?? null);
+    res.json({
+        ok: true,
+        data: user,
+        message: user.branch_name
+            ? `Usuario asignado a la sucursal ${user.branch_name}`
+            : 'Usuario sin sucursal asignada',
+    });
 });
 
 export const getOne = asyncHandler(async (req, res) => {

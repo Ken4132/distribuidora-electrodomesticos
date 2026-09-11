@@ -1,6 +1,6 @@
 import { query } from '../config/db.js';
 
-const PUBLIC_FIELDS = `id, username, full_name, email, phone, role, is_active,
+const PUBLIC_FIELDS = `id, username, full_name, email, phone, role, branch_id, is_active,
                        created_at, updated_at, last_login_at, deactivated_at`;
 
 /**
@@ -20,9 +20,11 @@ export async function findByUsername(username) {
 export async function findById(id) {
     const { rows } = await query(
         `SELECT ${PUBLIC_FIELDS.split(',').map((f) => `u.${f.trim()}`).join(', ')},
-                r.name AS role_name
+                r.name AS role_name,
+                b.code AS branch_code, b.name AS branch_name
            FROM users u
            LEFT JOIN roles r ON r.code = u.role
+           LEFT JOIN branches b ON b.id = u.branch_id
           WHERE u.id = $1`,
         [id]
     );
@@ -30,7 +32,7 @@ export async function findById(id) {
 }
 
 /** Listado con búsqueda y paginación para la pantalla de usuarios (REQ-0010). */
-export async function list({ search = '', role = '', status = 'all', page = 1, pageSize = 20 }) {
+export async function list({ search = '', role = '', status = 'all', branchId = null, page = 1, pageSize = 20 }) {
     const filters = [];
     const params = [];
 
@@ -45,6 +47,10 @@ export async function list({ search = '', role = '', status = 'all', page = 1, p
     }
     if (status === 'active') filters.push('u.is_active = TRUE');
     if (status === 'inactive') filters.push('u.is_active = FALSE');
+    if (branchId) {
+        params.push(branchId);
+        filters.push(`u.branch_id = $${params.length}`);
+    }
 
     const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const offset = (page - 1) * pageSize;
@@ -53,9 +59,11 @@ export async function list({ search = '', role = '', status = 'all', page = 1, p
     const { rows } = await query(
         `SELECT u.id, u.username, u.full_name, u.email, u.phone, u.role,
                 r.name AS role_name, u.is_active, u.created_at, u.last_login_at,
+                u.branch_id, b.code AS branch_code, b.name AS branch_name,
                 COUNT(*) OVER()::int AS total_count
            FROM users u
            LEFT JOIN roles r ON r.code = u.role
+           LEFT JOIN branches b ON b.id = u.branch_id
            ${where}
        ORDER BY u.is_active DESC, u.full_name
           LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -69,27 +77,47 @@ export async function list({ search = '', role = '', status = 'all', page = 1, p
     };
 }
 
-export async function create({ username, fullName, email, phone, passwordHash, role = 'vendedor' }) {
+export async function create({ username, fullName, email, phone, passwordHash, role = 'vendedor', branchId = null }) {
     const { rows } = await query(
-        `INSERT INTO users (username, full_name, email, phone, password_hash, role)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO users (username, full_name, email, phone, password_hash, role, branch_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING ${PUBLIC_FIELDS}`,
-        [username, fullName, email ?? null, phone ?? null, passwordHash, role]
+        [username, fullName, email ?? null, phone ?? null, passwordHash, role, branchId]
     );
     return rows[0];
 }
 
-/** Actualiza datos de la cuenta. NO toca la contraseña ni el estado. */
-export async function update(id, { fullName, email, phone, role }) {
+/**
+ * Actualiza datos de la cuenta. NO toca la contraseña ni el estado.
+ *
+ * `branchId` distingue tres casos: `undefined` es "no lo toques", un número
+ * asigna esa sucursal y `null` desasigna. Por eso se pasa un centinela (0)
+ * en lugar de apoyarse solo en COALESCE, que no puede expresar "ponlo a
+ * nulo".
+ */
+export async function update(id, { fullName, email, phone, role, branchId }) {
+    const branchParam = branchId === undefined ? null : branchId === null ? 0 : branchId;
+
     const { rows } = await query(
         `UPDATE users SET
              full_name = COALESCE($2, full_name),
              email     = $3,
              phone     = $4,
-             role      = COALESCE($5, role)
+             role      = COALESCE($5, role),
+             branch_id = CASE WHEN $6::bigint = 0 THEN NULL
+                              ELSE COALESCE($6::bigint, branch_id) END
          WHERE id = $1
          RETURNING ${PUBLIC_FIELDS}`,
-        [id, fullName ?? null, email ?? null, phone ?? null, role ?? null]
+        [id, fullName ?? null, email ?? null, phone ?? null, role ?? null, branchParam]
+    );
+    return rows[0] ?? null;
+}
+
+/** Asigna o quita la sucursal de un usuario. `branchId` null la quita. */
+export async function setBranch(id, branchId) {
+    const { rows } = await query(
+        `UPDATE users SET branch_id = $2 WHERE id = $1 RETURNING ${PUBLIC_FIELDS}`,
+        [id, branchId]
     );
     return rows[0] ?? null;
 }

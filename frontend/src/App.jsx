@@ -17,6 +17,9 @@ import Receivables from './pages/Receivables.jsx';
 import Integrations from './pages/Integrations.jsx';
 import Users from './pages/Users.jsx';
 import Audit from './pages/Audit.jsx';
+import Branches from './pages/Branches.jsx';
+import Inventory from './pages/Inventory.jsx';
+import Catalog from './pages/Catalog.jsx';
 
 export default function App() {
     return (
@@ -45,6 +48,30 @@ export default function App() {
                                     element={
                                         <ProtectedRoute permission={['receivables.view', 'receivables.view.own']}>
                                             <Receivables />
+                                        </ProtectedRoute>
+                                    }
+                                />
+                                <Route
+                                    path="/sucursales"
+                                    element={
+                                        <ProtectedRoute permission="branches.view">
+                                            <Branches />
+                                        </ProtectedRoute>
+                                    }
+                                />
+                                <Route
+                                    path="/inventario"
+                                    element={
+                                        <ProtectedRoute permission={['inventory.view', 'inventory.view.own']}>
+                                            <Inventory />
+                                        </ProtectedRoute>
+                                    }
+                                />
+                                <Route
+                                    path="/catalogo"
+                                    element={
+                                        <ProtectedRoute permission="products.view">
+                                            <Catalog />
                                         </ProtectedRoute>
                                     }
                                 />

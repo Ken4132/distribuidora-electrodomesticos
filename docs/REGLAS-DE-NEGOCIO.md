@@ -415,6 +415,232 @@ hay que volver a entrar.
 
 ---
 
+## 8. Fundación empresarial (bloque 2A)
+
+### N1 — Forma canónica de los datos de negocio ✅ DEFINIDA (bloque 2A)
+
+Todo dato textual **identificable o buscable** se guarda en una sola forma:
+
+```
+MAYÚSCULAS + SIN TILDES + ESPACIOS COLAPSADOS + SIN EXTREMOS
+
+'   José   López Álvarez  '  ->  'JOSE LOPEZ ALVAREZ'
+```
+
+Se aplica a: nombre, dirección y referencia del cliente; nombre, categoría y
+marca del producto; nombre de categoría, de marca y de sucursal.
+
+La normalización se hace en el **backend** (`utils/normalize.js`) y la base de
+datos la repite en un disparador (`normalize_business_text()`), de modo que
+ningún camino —un script, una carga masiva, psql— deja datos sin normalizar.
+Las dos implementaciones se comprueban carácter por carácter con
+`npm run test:normalize`.
+
+### N2 — La Ñ se conserva ✅ DEFINIDA (criterio lingüístico)
+
+En español la eñe es una letra propia, no un diacrítico. `PEÑA` y `PENA` son
+apellidos distintos y no deben colapsar. Se quitan tildes y diéresis; la eñe
+se queda.
+
+### N3 — Alcance: todo dato de negocio escrito por el usuario ✅ DEFINIDA (bloque 2A)
+
+Se normaliza **todo** lo que el usuario escribe como dato de negocio.
+
+En clientes: nombre completo, dirección, referencia de dirección,
+**municipio**, **departamento** y **notas**.
+
+En productos: nombre, categoría, marca, **modelo** y **descripción**.
+
+En sucursales, categorías y marcas: el nombre.
+
+### N3b — Qué NO se normaliza así, porque tiene regla propia ✅ DEFINIDA
+
+| Dato | Regla |
+| --- | --- |
+| Correo | **minúsculas**, sin espacios. Nunca mayúsculas. |
+| Teléfono | solo dígitos con `+502` opcional; el formato que ya usaba el proyecto |
+| DPI | solo los 13 dígitos |
+| Nombre de usuario | la lógica existente; no se toca |
+| Contraseñas y tokens | nunca se transforman |
+| Códigos de rol, de permiso y demás identificadores técnicos | nunca se transforman |
+| Nombre completo de una **cuenta de usuario** | se guarda literal: se copia a la bitácora y debe leerse como lo escribió el administrador |
+| Textos que trae el propio sistema | conservan su ortografía normal: no son datos escritos libremente por el usuario |
+
+### N4 — Categorías y marcas sin duplicados por formato ✅ DEFINIDA (bloque 2A)
+
+`Cama`, `CAMA` y `cama` son **una** categoría; `Facenco`, `FACENCO` y
+`facenco` son **una** marca. La unicidad se define sobre la forma normalizada
+mediante un índice único, así que la base de datos lo impide aunque la
+aplicación fallara.
+
+Desactivar una categoría o una marca **no** desvincula los productos
+(RN-0006): solo deja de ofrecerse para asignaciones nuevas.
+
+### S1 — Sucursales ✅ DEFINIDA (bloque 2A)
+
+El modelo admite N sucursales desde el primer día. La instalación arranca con
+una sola, `PRINCIPAL`, creada por la migración 004 como ancla de
+compatibilidad; el administrador debe renombrarla con el nombre real del
+local.
+
+Existe siempre **exactamente una sucursal predeterminada** (índice único
+parcial). Su papel no es decorativo: es a la que se imputa toda operación que
+no declara sucursal. No se puede desactivar, y una sucursal con existencias o
+con usuarios activos asignados tampoco.
+
+### S2 — Usuario y sucursal ⚠️ ASUMIDA
+
+`users.branch_id` es **opcional**: administración y gerencia pueden no
+pertenecer a ningún local. La migración **no asigna** sucursal a los usuarios
+existentes: inventar a qué local pertenece cada quien sería inventar
+información de la empresa. El administrador los asigna desde Usuarios.
+
+La pertenencia a sucursal **no** cambia ningún permiso ni alcance en este
+bloque. Los roles y el alcance `.own` del bloque 1 siguen exactamente igual.
+
+### I1 — Inventario por sucursal ✅ DEFINIDA (bloque 2A)
+
+Las existencias se desglosan por producto y sucursal en `inventory`, y se
+cumple siempre la invariante
+
+```
+products.stock  =  SUM(inventory.quantity)  por producto
+```
+
+verificable con la vista `v_inventory_mismatch` y con
+`GET /api/inventory/mismatches`.
+
+El único camino para cambiar existencias es insertar en `stock_movements`: un
+disparador aplica el movimiento al inventario de su sucursal. No existe forma
+de mover stock sin dejar rastro, y por eso las dos cifras no pueden
+separarse.
+
+### I2 — Límite conocido de esta fase ⚠️ IMPORTANTE
+
+La venta **todavía no declara sucursal**: descuenta de la predeterminada. Por
+tanto, trasladar existencias a otra sucursal deja esa mercadería fuera del
+alcance del registro de ventas hasta que se implemente la venta por sucursal.
+La aplicación avisa explícitamente al hacer un ajuste sobre una sucursal que
+no es la predeterminada, y el disparador rechaza con un mensaje claro
+cualquier salida que dejaría negativo el inventario de una sucursal.
+
+### CO1 — Histórico de costos ✅ DEFINIDA (bloque 2A)
+
+Cada alta y cada cambio de costo deja una fila en `product_cost_history` con
+el costo nuevo, el anterior, el motivo, el momento y el usuario responsable.
+La tabla es de **solo añadir**: un disparador rechaza `UPDATE` y `DELETE`
+(RN-0006), igual que la bitácora.
+
+El histórico **no** afecta a las ventas: `sale_items.unit_cost` congela el
+costo aplicado el día de la venta y ninguna venta se recalcula nunca con el
+costo actual.
+
+Se consulta con el permiso `products.cost.view`, el mismo que protege el
+costo actual (RN-0001): es el mismo secreto, solo que a lo largo del tiempo.
+
+### I3 — El vendedor opera solo con el inventario de su sucursal ✅ DEFINIDA (bloque 2A)
+
+Regla de negocio definitiva del propietario (2026-09-11).
+
+El vendedor **puede**: consultar el stock de su sucursal; operar únicamente
+con él; y consultar, **a título informativo**, cuántas unidades hay en otras
+sucursales.
+
+El vendedor **no puede**: modificar inventario de ninguna sucursal —tampoco
+la suya—, trasladar, reservar, ni vender con existencias ajenas.
+
+Se implementa con el mismo par de permisos que ya usa la cobranza:
+
+```
+inventory.view       -> el inventario de todas las sucursales
+inventory.view.own   -> solo el de la sucursal del usuario
+inventory.manage     -> ajustar existencias (no tiene variante propia)
+```
+
+La sucursal del usuario se lee **de la base de datos en cada petición**, no
+del token: si el administrador lo reasigna, el cambio vale en la siguiente
+petición y no cuando caduque la sesión.
+
+A un usuario de alcance propio se le **impone** su sucursal: mande lo que
+mande en `branch_id`, la consulta se resuelve sobre la suya y la respuesta
+incluye un aviso. Consultar la disponibilidad de otras sucursales va por una
+ruta distinta que marca fila por fila cuáles unidades son operativas para él
+y cuáles solo informativas.
+
+**Límite de esta fase:** la venta todavía no descuenta de la sucursal del
+vendedor —eso es el bloque siguiente—. Hoy descuenta de la predeterminada.
+
+### PE1 — Permisos nuevos ✅ DEFINIDA (bloque 2A)
+
+| Permiso | Quién lo tiene |
+| --- | --- |
+| `branches.view`, `branches.manage`, `branches.assign` | Administrador |
+| `inventory.view`, `inventory.manage` | Administrador |
+| `inventory.view.own` | Administrador, **Ventas** |
+| `categories.manage`, `brands.manage` | Administrador |
+| `credits.view` | Administrador, Gerencia, Verificador |
+| `credits.verify` | Administrador, Verificador |
+| `credits.decide` | Administrador, **Gerencia** — y nadie más |
+
+**Decisión cerrada (2026-09-11):** Cobros y Verificación **no tienen acceso
+al módulo de Inventario ni al de Sucursales**, y Gerencia tampoco entra al de
+Inventario: consulta Productos, Catálogo, costo actual e histórico de costos,
+pero no administra existencias.
+
+Todo lo que cuelga de `/api/inventory` exige `inventory.view`,
+`inventory.view.own` o `inventory.manage`, **sin excepciones**; y todo lo que
+cuelga de `/api/branches` exige `branches.view` o `branches.manage`. La
+consulta informativa de disponibilidad vive en `GET /api/products/:id/inventory`,
+bajo `products.view`, porque es información del catálogo y no del módulo de
+inventario.
+
+Los tres de créditos son **catálogo reservado**: la aplicación todavía no los
+comprueba porque el módulo de créditos llega en un bloque posterior. Se
+registran ahora para que la matriz de roles quede montada, y su descripción
+lo dice en voz alta en la pantalla de Roles y permisos.
+
+Consultar categorías y marcas no lleva permiso propio: es parte de navegar el
+catálogo y va con `products.view`, que el vendedor ya tenía.
+
+### PE2 — Gerencia ✅ DEFINIDA (decisión del propietario, 2026-09-11)
+
+Gerencia consulta el panel, **consulta y decide créditos**, y **consulta el
+costo de los productos y su histórico**. Esto amplía lo que el bloque 1 le
+había dado (solo `dashboard.view`); `products.view` entra porque sin poder
+listar el catálogo no hay dónde consultar un costo.
+
+Gerencia **no** recibe permisos administrativos por ser Gerencia: sigue sin
+clientes, ventas, pagos, cobranza, usuarios, roles ni inventario.
+
+El **Verificador** verifica pero **no decide**: tiene `credits.verify` y
+explícitamente no `credits.decide`. La migración incluye una salvaguarda que
+retira `credits.decide` de cualquier rol que no sea Administrador o
+Gerencia.
+
+### PE3 — Flujo de crédito, preparado conceptualmente ⏳ BLOQUE POSTERIOR
+
+El ciclo que tendrá que soportar el bloque de créditos es:
+
+```
+Solicitud -> Verificación -> Evaluación -> Decisión -> Aprobado / Rechazado
+```
+
+y los tres permisos ya registrados lo cubren:
+
+| Etapa | Permiso | Quién |
+| --- | --- | --- |
+| Solicitud y consulta | `credits.view` | Administración, Gerencia, Verificación |
+| Verificación | `credits.verify` | Administración, Verificación |
+| Evaluación y decisión | `credits.decide` | **Administración y Gerencia, nadie más** |
+
+Ventas no interviene en la decisión, y Verificación no decide: verifica.
+
+**En este bloque no hay tablas, endpoints ni pantallas de crédito.** Solo el
+catálogo de permisos, para que la matriz de roles no haya que rehacerla
+después. La aplicación todavía no comprueba ninguno de los tres.
+
+---
+
 ## Lista de verificación
 
 Para revisar en la validación local. Marca lo que coincide con la operación
@@ -446,3 +672,10 @@ real y señala lo que hay que cambiar.
 | U5 | No se puede quitar al **último administrador activo** | |
 | U6 | El vendedor cobra **solo los créditos que él registró** | |
 | U6 | Las ventas de **contado** NO entran en la cartera propia del vendedor | |
+| N3 | `notes`, `description`, municipio y departamento se guardan **normalizados** | |
+| I3 | El vendedor **no** ajusta inventario, ni siquiera el de su sucursal | |
+| I3 | El vendedor **sí** puede ver cuántas unidades hay en otras sucursales | |
+| PE2 | Gerencia **decide** créditos y **ve** costos; el Verificador **no** decide | |
+| S2 | La migración **no** asigna sucursal a los usuarios existentes | |
+| I2 | Trasladar stock fuera de la predeterminada lo deja **fuera** de las ventas | |
+| PE1 | Solo el **administrador** ve sucursales e inventario por sucursal | |

@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { trimmed, optionalText, pagination } from './common.schema.js';
+import { pagination, businessText, optionalBusinessText } from './common.schema.js';
+import { normalizeEmail } from '../utils/normalize.js';
 
 /** DPI de Guatemala: 13 dígitos. Se aceptan espacios/guiones y se normalizan. */
 const dpi = z
@@ -23,13 +24,15 @@ const optionalPhone = z
     .nullable()
     .optional();
 
+// El correo se normaliza a minúsculas, NUNCA a mayúsculas: la parte local
+// de una dirección puede ser sensible a mayúsculas.
 const email = z
     .string()
     .trim()
     .email('Correo electrónico inválido')
     .max(150)
     .or(z.literal(''))
-    .transform((v) => (v === '' ? null : v))
+    .transform(normalizeEmail)
     .nullable()
     .optional();
 
@@ -39,15 +42,24 @@ const coordinate = (min, max, label) =>
 export const createCustomerSchema = z
     .object({
         dpi,
-        full_name: trimmed(3, 150, 'El nombre completo'),
+        // Texto de negocio: se guarda en su forma canónica (MAYÚSCULAS, sin
+        // tildes, espacios colapsados). Así "José López", "JOSE LOPEZ" y
+        // "  josé   lópez " son el mismo cliente y la búsqueda los encuentra
+        // escriba como escriba el operador.
+        full_name: businessText(3, 150, 'El nombre completo'),
         phone,
         phone_alt: optionalPhone,
         email,
-        address: trimmed(5, 500, 'La dirección'),
-        address_ref: optionalText(500),
+        address: businessText(5, 500, 'La dirección'),
+        address_ref: optionalBusinessText(500),
+        municipality: optionalBusinessText(80),
+        department: optionalBusinessText(80),
         latitude: coordinate(-90, 90, 'Latitud'),
         longitude: coordinate(-180, 180, 'Longitud'),
-        notes: optionalText(1000),
+        // Las observaciones también son un dato de negocio escrito por el
+        // usuario: se normalizan igual que el resto (decisión del
+        // propietario, 2026-09-11).
+        notes: optionalBusinessText(1000),
     })
     .strict();
 

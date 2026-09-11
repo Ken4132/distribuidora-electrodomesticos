@@ -108,10 +108,32 @@ async function main() {
         cobrador.permissions.includes('payments.create') && cobrador.permissions.includes('receivables.view'),
         cobrador.permissions.join(', ')
     );
+    // ACTUALIZADO EN EL BLOQUE 2A. El bloque 1 dejó a Gerencia solo con
+    // `dashboard.view`; el propietario decidió después (2026-09-11) que
+    // Gerencia consulta y decide créditos y consulta costos e histórico de
+    // costos. `products.view` entra porque sin poder listar el catálogo no
+    // hay dónde consultar un costo. Sigue SIN clientes, ventas, pagos ni
+    // cobranza, que es lo que comprueban las líneas de más abajo.
     check(
-        'Gerencia solo tiene el panel de inicio',
-        gerencia.permissions.length === 1 && gerencia.permissions[0] === 'dashboard.view',
+        'Gerencia tiene panel, catálogo con costos y decisión de créditos',
+        ['dashboard.view', 'products.view', 'products.cost.view', 'credits.view', 'credits.decide'].every((p) =>
+            gerencia.permissions.includes(p)
+        ),
         gerencia.permissions.join(', ')
+    );
+    check(
+        'Gerencia NO recibe permisos administrativos por ser Gerencia',
+        !['users.manage', 'roles.manage', 'inventory.manage', 'branches.manage', 'products.update'].some((p) =>
+            gerencia.permissions.includes(p)
+        ),
+        gerencia.permissions.join(', ')
+    );
+    check(
+        'El verificador verifica pero NO decide créditos',
+        gerencia.permissions.includes('credits.decide') &&
+            verificador.permissions.includes('credits.verify') &&
+            !verificador.permissions.includes('credits.decide'),
+        verificador.permissions.join(', ')
     );
 
     // ------------------------------------------------- RN-0001 y RN-0002
@@ -174,7 +196,9 @@ async function main() {
         ['El verificador NO puede registrar pagos', 'POST', '/payments', verificador.token, 403],
         ['Gerencia SÍ puede ver el panel de inicio', 'GET', '/dashboard', gerencia.token, 200],
         ['Gerencia NO puede consultar clientes', 'GET', '/customers', gerencia.token, 403],
-        ['Gerencia NO puede consultar productos', 'GET', '/products', gerencia.token, 403],
+        // Cambiado en el bloque 2A: Gerencia consulta el catálogo porque
+        // tiene que poder consultar costos e histórico de costos.
+        ['Gerencia SÍ puede consultar productos', 'GET', '/products', gerencia.token, 200],
         ['Gerencia NO puede consultar ventas', 'GET', '/sales', gerencia.token, 403],
         ['Gerencia NO puede consultar pagos', 'GET', '/payments', gerencia.token, 403],
         ['Gerencia NO puede consultar la cartera', 'GET', '/payments/receivables', gerencia.token, 403],

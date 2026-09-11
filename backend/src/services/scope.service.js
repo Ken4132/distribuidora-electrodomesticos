@@ -24,6 +24,7 @@
  * cuenta que la registró fue eliminada— no pertenece a la cartera de nadie.
  */
 import { can } from './authorization.service.js';
+import { query } from '../config/db.js';
 
 /** Modalidades que forman parte de una cartera de cobranza. */
 export const CREDIT_MODES = Object.freeze(['credito_4', 'credito_8']);
@@ -89,3 +90,86 @@ export function ownPortfolioFilter(scope, params) {
     const modes = `$${params.length}`;
     return `created_by = ${user} AND payment_mode = ANY(${modes}::varchar[])`;
 }
+
+// =====================================================================
+// ALCANCE DE INVENTARIO  (bloque 2A)
+//
+// REGLA DE NEGOCIO DEFINITIVA:
+// el vendedor opera única y exclusivamente con el inventario de SU
+// sucursal. Puede consultar, a título informativo, si hay unidades en
+// otras sucursales, pero esas unidades NO son stock disponible para él.
+//
+// Se expresa con el mismo par que ya usa la cobranza:
+//
+//     inventory.view       -> el inventario de todas las sucursales
+//     inventory.view.own   -> solo el de la sucursal del usuario
+//
+// Y con una separación que el enunciado exige explícitamente: CONSULTAR
+// no es ADMINISTRAR. Ajustar existencias es `inventory.manage`, que el
+// vendedor no tiene en ninguna de sus formas.
+// =====================================================================
+
+/**
+ * Sucursal del usuario, leída SIEMPRE de la base de datos.
+ *
+ * A propósito no se lee del token: el JWT solo lleva id, usuario y rol, y
+ * si mañana el administrador reasigna a alguien de sucursal, el cambio
+ * tiene que valer en la siguiente petición y no cuando caduque la sesión.
+ * Es el mismo criterio con el que el bloque 1 resuelve los permisos.
+ */
+export async function branchOfUser(userId) {
+    if (!userId) return null;
+    const { rows } = await query('SELECT branch_id FROM users WHERE id = $1', [userId]);
+    const branchId = rows[0]?.branch_id;
+    return branchId === null || branchId === undefined ? null : Number(branchId);
+}
+
+/**
+ * Alcance de inventario del usuario.
+ *
+ * @returns {{global: true, branchId: null} |
+ *           {global: false, branchId: number|null} |
+ *           null}
+ *          null = no puede consultar inventario en absoluto.
+ *          global:false con branchId null = tiene el permiso propio pero
+ *          no tiene sucursal asignada, así que no hay inventario suyo.
+ */
+export async function inventoryScope(user) {
+    if (!user) return null;
+    if (await can(user.role, 'inventory.view')) return { global: true, branchId: null };
+    if (await can(user.role, 'inventory.view.own')) {
+        return { global: false, branchId: await branchOfUser(user.id) };
+    }
+    return null;
+}
+
+/** ¿Puede este usuario administrar existencias? Solo el permiso global. */
+export const canManageInventory = (user) => can(user?.role, 'inventory.manage');
+
+/**
+ * Resuelve la sucursal sobre la que se va a CONSULTAR.
+ *
+ * Aquí es donde se corta el intento de saltarse la restricción cambiando
+ * el identificador en la petición: a un usuario de alcance propio se le
+ * IGNORA la sucursal que pida y se le impone la suya. No se le devuelve un
+ * 403 por consultar —consultar otras sucursales es legítimo y va por la
+ * vía informativa—, simplemente su vista operativa nunca deja de ser la de
+ * su sucursal.
+ *
+ * @returns {{branchId: number|null, forced: boolean}}
+ */
+export function resolveInventoryBranch(scope, requestedBranchId) {
+    if (scope?.global) {
+        return { branchId: requestedBranchId ? Number(requestedBranchId) : null, forced: false };
+    }
+    const requested = requestedBranchId ? Number(requestedBranchId) : null;
+    return {
+        branchId: scope?.branchId ?? null,
+        forced: requested !== null && requested !== (scope?.branchId ?? null),
+    };
+}
+
+/** Mensaje cuando el usuario no tiene sucursal asignada. */
+export const NO_BRANCH_MESSAGE =
+    'Tu usuario no tiene sucursal asignada, así que no hay inventario propio que mostrar. ' +
+    'Pídele al administrador que te asigne una sucursal.';

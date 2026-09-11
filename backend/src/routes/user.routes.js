@@ -11,6 +11,7 @@ import {
     setUserActiveSchema,
     changePasswordSchema,
     changeOwnPasswordSchema,
+    assignBranchSchema,
 } from '../validators/user.schema.js';
 
 const router = Router();
@@ -64,6 +65,28 @@ router.put(
         details: (req) => ({ cambios: Object.keys(req.body ?? {}) }),
     }),
     ctrl.update
+);
+
+/**
+ * Asignación de sucursal. Permiso propio (`branches.assign`) y no
+ * `users.manage`: saber en qué local trabaja cada quien es una decisión
+ * organizativa, no la misma que crear cuentas o cambiar roles. En la
+ * migración 004 solo lo tiene el administrador.
+ */
+router.patch(
+    '/:id/branch',
+    requirePermission('branches.assign', { module: MODULE }),
+    validate({ params: idParam, body: assignBranchSchema }),
+    audit('user.branch', {
+        module: MODULE,
+        entity: 'user',
+        summary: (req, payload) =>
+            payload?.data?.branch_name
+                ? `Asignó el usuario "${payload?.data?.username}" a la sucursal ${payload?.data?.branch_name}`
+                : `Quitó la sucursal al usuario "${payload?.data?.username}"`,
+        details: (req) => ({ sucursal_id: req.body?.branch_id ?? null }),
+    }),
+    ctrl.assignBranch
 );
 
 router.patch(

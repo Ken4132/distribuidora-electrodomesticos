@@ -5,9 +5,19 @@ import { useToast } from '../context/ToastContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { usePaymentModes } from '../hooks/usePaymentModes.js';
 import { Badge, EmptyState, Field, Modal, Pagination, SearchInput, Spinner } from '../components/ui.jsx';
-import { money } from '../utils/format.js';
+import { money, formatDate } from '../utils/format.js';
 
-const EMPTY = { code: '', name: '', description: '', category: 'General', brand: '', cost: '', stock: 0, min_stock: 0 };
+const EMPTY = {
+    code: '',
+    name: '',
+    description: '',
+    category: 'General',
+    brand: '',
+    model: '',
+    cost: '',
+    stock: 0,
+    min_stock: 0,
+};
 
 export default function Products() {
     const toast = useToast();
@@ -22,7 +32,12 @@ export default function Products() {
     const mayUpdate = can('products.update');
     const mayStatus = can('products.status');
     const mayStock = can('products.stock');
-    const hasActions = mayUpdate || mayStatus || mayStock;
+    // El histórico de costos es el mismo secreto que el costo actual
+    // (RN-0001), así que se rige por el mismo permiso.
+    const mayCost = seeCost;
+    // La disponibilidad por sucursal la puede consultar cualquiera que
+    // vea productos, así que la columna de acciones siempre se pinta.
+    const hasActions = true;
     const [search, setSearch] = useState('');
     const [status, setStatus] = useState('active');
     const [lowStock, setLowStock] = useState(false);
@@ -30,6 +45,11 @@ export default function Products() {
     const [state, setState] = useState({ loading: true, rows: [], pagination: null });
     const [modal, setModal] = useState(null);
     const [stockModal, setStockModal] = useState(null);
+    const [costModal, setCostModal] = useState(null);
+    const [availModal, setAvailModal] = useState(null);
+    // Cuando el backend responde con alcance, el usuario opera con el
+    // inventario de una sola sucursal: se muestra esa existencia aparte.
+    const [scope, setScope] = useState(null);
     const debounced = useDebounce(search);
 
     // Texto de ayuda construido con las reglas que informa el backend.
@@ -49,6 +69,7 @@ export default function Products() {
                 pageSize: 15,
             });
             setState({ loading: false, rows: res.data, pagination: res.pagination });
+            setScope(res.scope ?? null);
         } catch (e) {
             setState({ loading: false, rows: [], pagination: null });
             toast.error(e.message);
@@ -87,7 +108,7 @@ export default function Products() {
             </div>
 
             <div className="toolbar">
-                <SearchInput value={search} onChange={setSearch} placeholder="Código, nombre o marca…" />
+                <SearchInput value={search} onChange={setSearch} placeholder="Código, nombre, marca o modelo…" />
                 <select className="input input--select" value={status} onChange={(e) => setStatus(e.target.value)}>
                     <option value="active">Activos</option>
                     <option value="inactive">Inactivos</option>
@@ -115,7 +136,8 @@ export default function Products() {
                                 <th className="right">Contado</th>
                                 <th className="right">4 pagos</th>
                                 <th className="right">8 pagos</th>
-                                <th className="right">Stock</th>
+                                {scope ? <th className="right">Tu sucursal</th> : null}
+                                <th className="right">{scope ? 'Total empresa' : 'Stock'}</th>
                                 <th>Estado</th>
                                 {hasActions && <th className="right">Acciones</th>}
                             </tr>
@@ -127,13 +149,29 @@ export default function Products() {
                                     <td>
                                         {p.name}
                                         {p.brand && <span className="muted"> · {p.brand}</span>}
+                                        {p.model && <span className="muted"> {p.model}</span>}
                                     </td>
                                     <td>{p.category}</td>
                                     {seeCost && <td className="right muted">{money(p.cost)}</td>}
                                     <td className="right">{money(p.price_cash)}</td>
                                     <td className="right">{money(p.price_credit_4)}</td>
                                     <td className="right">{money(p.price_credit_8)}</td>
-                                    <td className={`right strong ${p.stock <= p.min_stock ? 'text-danger' : ''}`}>
+                                    {scope ? (
+                                        <td
+                                            className={`right strong ${
+                                                (p.branch_stock ?? 0) <= p.min_stock ? 'text-danger' : ''
+                                            }`}
+                                            title="Existencia con la que puedes operar"
+                                        >
+                                            {p.branch_stock ?? 0}
+                                        </td>
+                                    ) : null}
+                                    <td
+                                        className={`right ${scope ? 'muted' : 'strong'} ${
+                                            !scope && p.stock <= p.min_stock ? 'text-danger' : ''
+                                        }`}
+                                        title={scope ? 'Informativo: incluye otras sucursales' : undefined}
+                                    >
                                         {p.stock}
                                     </td>
                                     <td>
@@ -157,6 +195,22 @@ export default function Products() {
                                                     onClick={() => setModal({ mode: 'edit', data: p })}
                                                 >
                                                     Editar
+                                                </button>
+                                            )}
+                                            <button
+                                                className="btn btn--ghost btn--sm"
+                                                onClick={() => setAvailModal(p)}
+                                                title="Disponibilidad por sucursal"
+                                            >
+                                                Disponibilidad
+                                            </button>
+                                            {mayCost && (
+                                                <button
+                                                    className="btn btn--ghost btn--sm"
+                                                    onClick={() => setCostModal(p)}
+                                                    title="Histórico de costos"
+                                                >
+                                                    Costos
                                                 </button>
                                             )}
                                             {mayStatus && (
@@ -199,6 +253,8 @@ export default function Products() {
                     }}
                 />
             )}
+            {costModal && <CostHistoryModal product={costModal} onClose={() => setCostModal(null)} />}
+            {availModal && <AvailabilityModal product={availModal} onClose={() => setAvailModal(null)} />}
         </div>
     );
 }
@@ -233,6 +289,7 @@ function ProductModal({ mode, initial, onClose, onSaved }) {
                 description: form.description || '',
                 category: form.category,
                 brand: form.brand || '',
+                model: form.model || '',
                 cost: Number(form.cost),
                 min_stock: Number(form.min_stock) || 0,
             };
@@ -263,6 +320,9 @@ function ProductModal({ mode, initial, onClose, onSaved }) {
                 </Field>
                 <Field label="Categoría" required error={errors.category} className="span-1">
                     <input className="input" value={form.category} onChange={set('category')} />
+                </Field>
+                <Field label="Modelo" error={errors.model} className="span-1">
+                    <input className="input" value={form.model ?? ''} onChange={set('model')} />
                 </Field>
                 <Field label="Marca" error={errors.brand} className="span-1">
                     <input className="input" value={form.brand ?? ''} onChange={set('brand')} />
@@ -387,6 +447,185 @@ function StockModal({ product, onClose, onSaved }) {
                     </button>
                 </div>
             </form>
+        </Modal>
+    );
+}
+
+/**
+ * Histórico de costos de un producto.
+ *
+ * Responde a "¿cuánto costaba esto en tal fecha y quién lo cambió?".
+ * NO afecta a las ventas ya registradas: cada venta conserva el costo que
+ * tenía el producto ese día, congelado en su detalle.
+ */
+function CostHistoryModal({ product, onClose }) {
+    const toast = useToast();
+    const [state, setState] = useState({ loading: true, rows: [], inventory: [] });
+
+    useEffect(() => {
+        productsApi
+            .costHistory(product.id)
+            .then((hist) => setState({ loading: false, rows: hist.data, inventory: [] }))
+            .catch((e) => {
+                setState({ loading: false, rows: [], inventory: [] });
+                toast.error(e.fullMessage);
+            });
+    }, [product.id, toast]);
+
+    return (
+        <Modal open title={`Costos — ${product.code} ${product.name}`} onClose={onClose} wide>
+            {state.loading ? (
+                <Spinner />
+            ) : (
+                <>
+                    <p className="muted">
+                        Las ventas ya registradas conservan el costo que tenía el producto ese día. Cambiar el costo
+                        aquí no las recalcula.
+                    </p>
+
+                    {state.rows.length === 0 ? (
+                        <EmptyState title="Sin movimientos de costo" />
+                    ) : (
+                        <div className="table-wrap">
+                            <table className="table">
+                                <thead>
+                                    <tr>
+                                        <th>Fecha</th>
+                                        <th className="right">Costo</th>
+                                        <th className="right">Anterior</th>
+                                        <th className="right">Variación</th>
+                                        <th>Motivo</th>
+                                        <th>Usuario</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {state.rows.map((h) => (
+                                        <tr key={h.id}>
+                                            <td>{formatDate(h.changed_at)}</td>
+                                            <td className="right">
+                                                <strong>Q{money(h.cost)}</strong>
+                                            </td>
+                                            <td className="right">{h.previous_cost ? `Q${money(h.previous_cost)}` : '—'}</td>
+                                            <td className="right">
+                                                {Number(h.variation) === 0
+                                                    ? '—'
+                                                    : `${Number(h.variation) > 0 ? '+' : ''}Q${money(h.variation)}`}
+                                            </td>
+                                            <td>{h.reason}</td>
+                                            <td>{h.changed_by_username ?? '—'}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+
+                    {state.inventory.length > 0 ? (
+                        <>
+                            <h3 className="mt">Existencias por sucursal</h3>
+                            <div className="table-wrap">
+                                <table className="table">
+                                    <thead>
+                                        <tr>
+                                            <th>Sucursal</th>
+                                            <th className="right">Existencia</th>
+                                            <th className="right">Mínimo</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {state.inventory.map((i) => (
+                                            <tr key={i.branch_id}>
+                                                <td>{i.branch_name}</td>
+                                                <td className="right">{i.quantity}</td>
+                                                <td className="right">{i.min_stock}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </>
+                    ) : null}
+                </>
+            )}
+        </Modal>
+    );
+}
+
+/**
+ * Disponibilidad del producto por sucursal.
+ *
+ * Es una CONSULTA INFORMATIVA. Para un usuario que opera con una sola
+ * sucursal, el desglose marca explícitamente qué unidades son suyas y
+ * cuáles solo puede ver: saber que hay 5 camas en otra sucursal no
+ * convierte esas 5 camas en stock disponible para vender.
+ */
+function AvailabilityModal({ product, onClose }) {
+    const toast = useToast();
+    const [state, setState] = useState({ loading: true, data: null });
+
+    useEffect(() => {
+        productsApi
+            .inventory(product.id)
+            .then((res) => setState({ loading: false, data: res.data }))
+            .catch((e) => {
+                setState({ loading: false, data: null });
+                toast.error(e.fullMessage);
+            });
+    }, [product.id, toast]);
+
+    const d = state.data;
+
+    return (
+        <Modal open title={`Disponibilidad — ${product.code} ${product.name}`} onClose={onClose}>
+            {state.loading ? (
+                <Spinner />
+            ) : !d ? (
+                <EmptyState title="No se pudo consultar la disponibilidad" />
+            ) : (
+                <>
+                    <div className="cards">
+                        <div className="card">
+                            <div className="card__label">Con la que puedes operar</div>
+                            <div className="card__value">{d.operational_stock}</div>
+                        </div>
+                        {!d.scope.global ? (
+                            <div className="card">
+                                <div className="card__label">En otras sucursales (informativo)</div>
+                                <div className="card__value muted">{d.informational_stock}</div>
+                            </div>
+                        ) : null}
+                    </div>
+
+                    {d.notice ? <div className="alert">{d.notice}</div> : null}
+
+                    <div className="table-wrap">
+                        <table className="table">
+                            <thead>
+                                <tr>
+                                    <th>Sucursal</th>
+                                    <th className="right">Existencia</th>
+                                    <th>Para ti</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {d.branches.map((b) => (
+                                    <tr key={b.branch_id} className={b.operational ? '' : 'muted'}>
+                                        <td>{b.branch_name}</td>
+                                        <td className="right strong">{b.quantity}</td>
+                                        <td>
+                                            {b.operational ? (
+                                                <Badge status="pagada">Operativa</Badge>
+                                            ) : (
+                                                <Badge status="pendiente">Solo informativa</Badge>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </>
+            )}
         </Modal>
     );
 }

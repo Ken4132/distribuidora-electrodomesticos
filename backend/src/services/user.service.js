@@ -9,9 +9,25 @@
  */
 import bcrypt from 'bcryptjs';
 import * as User from '../models/user.model.js';
+import * as Branch from '../models/branch.model.js';
 import { AppError } from '../utils/AppError.js';
 
 const BCRYPT_ROUNDS = 10;
+
+/**
+ * La sucursal referenciada tiene que existir y estar activa.
+ * `undefined` significa "no se está tocando"; `null`, "quítasela".
+ */
+async function assertBranchAssignable(branchId) {
+    if (branchId === undefined || branchId === null) return null;
+
+    const branch = await Branch.findById(branchId);
+    if (!branch) throw AppError.badRequest('La sucursal seleccionada no existe');
+    if (!branch.is_active) {
+        throw AppError.unprocessable(`La sucursal "${branch.name}" está desactivada`);
+    }
+    return branch;
+}
 
 export const listUsers = (opts) => User.list(opts);
 
@@ -25,6 +41,8 @@ export async function createUser(data) {
     const existing = await User.findByUsername(data.username);
     if (existing) throw AppError.conflict(`El usuario "${data.username}" ya está en uso`);
 
+    await assertBranchAssignable(data.branch_id);
+
     const passwordHash = await bcrypt.hash(data.password, BCRYPT_ROUNDS);
     return User.create({
         username: data.username,
@@ -33,6 +51,7 @@ export async function createUser(data) {
         phone: data.phone,
         passwordHash,
         role: data.role,
+        branchId: data.branch_id ?? null,
     });
 }
 
@@ -58,12 +77,31 @@ export async function updateUser(id, data, actorId) {
         }
     }
 
+    await assertBranchAssignable(data.branch_id);
+
     return User.update(id, {
         fullName: data.full_name,
         email: data.email,
         phone: data.phone,
         role: data.role,
+        branchId: data.branch_id,
     });
+}
+
+/**
+ * Asigna (o quita, con null) la sucursal de un usuario.
+ * Es una operación aparte de la edición general porque es la que el
+ * administrador hace más a menudo y la que conviene poder auditar con su
+ * propia entrada en la bitácora.
+ */
+export async function assignBranch(id, branchId) {
+    const current = await User.findById(id);
+    if (!current) throw AppError.notFound('Usuario no encontrado');
+
+    const branch = await assertBranchAssignable(branchId);
+    const updated = await User.setBranch(id, branchId ?? null);
+
+    return { ...updated, branch_code: branch?.code ?? null, branch_name: branch?.name ?? null };
 }
 
 export async function setUserActive(id, isActive, actorId) {
