@@ -54,7 +54,7 @@ async function seedAdmin(client) {
 }
 
 /**
- * Usuarios de prueba, uno por cada perfil de la Tabla 6 de la tesis.
+ * Usuarios de prueba, al menos uno por cada rol vigente.
  * Sirven para comprobar en la práctica RN-0001 (el vendedor no ve costos),
  * RN-0008 (cada rol entra solo a lo suyo) y la regla U6 (el vendedor solo
  * cobra su propia cartera). Solo en desarrollo.
@@ -65,7 +65,10 @@ const DEMO_USERS = [
     // pueda cobrar la cartera de otro.
     { username: 'vendedor2', full_name: 'Segundo Vendedor de Prueba', role: 'vendedor' },
     { username: 'cobrador', full_name: 'Cobrador de Prueba', role: 'cobrador' },
-    { username: 'verificador', full_name: 'Verificador de Prueba', role: 'verificador' },
+    // La verificación de créditos es una función del Cobrador (006): ya no
+    // existe el rol `verificador`. Un segundo cobrador permite comprobar el
+    // alcance por sucursal de las solicitudes de crédito.
+    { username: 'cobrador2', full_name: 'Segundo Cobrador de Prueba', role: 'cobrador' },
     { username: 'gerencia', full_name: 'Gerencia de Prueba', role: 'gerencia' },
 ];
 
@@ -75,6 +78,7 @@ async function seedDemoUsers(client) {
         const { rows } = await client.query('SELECT id FROM users WHERE lower(username) = lower($1)', [
             u.username,
         ]);
+        // Un usuario existente no se modifica (ni su rol ni su sucursal).
         if (rows.length) continue;
         const hash = await bcrypt.hash(password, 10);
         await client.query(

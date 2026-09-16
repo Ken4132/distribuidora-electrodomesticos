@@ -81,16 +81,18 @@ async function main() {
     const vendedor = await login('vendedor', DEMO_PASS);
     const vendedor2 = await login('vendedor2', DEMO_PASS);
     const cobrador = await login('cobrador', DEMO_PASS);
-    const verificador = await login('verificador', DEMO_PASS);
+    // El rol `verificador` ya no existe (006): la verificación de créditos es
+    // una función del Cobrador. `cobrador2` es el segundo cobrador de prueba.
+    const cobrador2 = await login('cobrador2', DEMO_PASS);
     const gerencia = await login('gerencia', DEMO_PASS);
 
     check('El vendedor de prueba inicia sesión', Boolean(vendedor.token), `estado ${vendedor.status}`);
     check('El segundo vendedor inicia sesión', Boolean(vendedor2.token), `estado ${vendedor2.status}`);
     check('El cobrador de prueba inicia sesión', Boolean(cobrador.token), `estado ${cobrador.status}`);
-    check('El verificador de prueba inicia sesión', Boolean(verificador.token), `estado ${verificador.status}`);
+    check('El segundo cobrador de prueba inicia sesión', Boolean(cobrador2.token), `estado ${cobrador2.status}`);
     check('Gerencia de prueba inicia sesión', Boolean(gerencia.token), `estado ${gerencia.status}`);
 
-    if (!vendedor.token || !vendedor2.token || !cobrador.token || !verificador.token || !gerencia.token) {
+    if (!vendedor.token || !vendedor2.token || !cobrador.token || !cobrador2.token || !gerencia.token) {
         console.log('\nFaltan los usuarios de prueba. Ejecuta `npm run seed` en desarrollo.\n');
         process.exit(1);
     }
@@ -102,6 +104,29 @@ async function main() {
             !vendedor.permissions.includes('payments.create') &&
             !vendedor.permissions.includes('receivables.view'),
         vendedor.permissions.join(', ')
+    );
+    check(
+        'El vendedor crea solicitudes y solo consulta las propias (no todas)',
+        vendedor.permissions.includes('credits.create') &&
+            vendedor.permissions.includes('credits.view.own') &&
+            !vendedor.permissions.includes('credits.view') &&
+            !vendedor.permissions.includes('credits.verify') &&
+            !vendedor.permissions.includes('credits.decide'),
+        vendedor.permissions.join(', ')
+    );
+    check(
+        'El cobrador verifica, consulta solo su sucursal y no decide ni crea créditos',
+        cobrador.permissions.includes('credits.verify') &&
+            cobrador.permissions.includes('credits.view.branch') &&
+            !cobrador.permissions.includes('credits.view') &&
+            !cobrador.permissions.includes('credits.decide') &&
+            !cobrador.permissions.includes('credits.create'),
+        cobrador.permissions.join(', ')
+    );
+    check(
+        'Un segundo cobrador recibe exactamente los mismos permisos que el primero',
+        cobrador2.permissions.join(',') === cobrador.permissions.join(','),
+        cobrador2.permissions.join(', ')
     );
     check(
         'El cobrador recibe los permisos globales de cobranza',
@@ -129,11 +154,11 @@ async function main() {
         gerencia.permissions.join(', ')
     );
     check(
-        'El verificador verifica pero NO decide créditos',
+        'El cobrador verifica pero NO decide créditos; Gerencia sí decide',
         gerencia.permissions.includes('credits.decide') &&
-            verificador.permissions.includes('credits.verify') &&
-            !verificador.permissions.includes('credits.decide'),
-        verificador.permissions.join(', ')
+            cobrador.permissions.includes('credits.verify') &&
+            !cobrador.permissions.includes('credits.decide'),
+        cobrador.permissions.join(', ')
     );
 
     // ------------------------------------------------- RN-0001 y RN-0002
@@ -175,6 +200,14 @@ async function main() {
         modesAdmin.body?.data?.map((m) => m.markup_percent).join(',')
     );
 
+    const catalogoRoles = await api('GET', '/roles', { token: admin.token });
+    const codigosRoles = (catalogoRoles.body?.data ?? []).map((r) => r.role_code ?? r.code);
+    check(
+        'El catálogo de roles ya no contiene el rol verificador (006)',
+        catalogoRoles.status === 200 && codigosRoles.includes('cobrador') && !codigosRoles.includes('verificador'),
+        codigosRoles.join(', ')
+    );
+
     // ------------------------------------------------------------ RN-0008
     console.log('\n[3] RN-0008: cada rol accede solo a sus módulos');
 
@@ -191,9 +224,14 @@ async function main() {
         ['El cobrador SÍ puede consultar la cartera', 'GET', '/payments/receivables', cobrador.token, 200],
         ['El vendedor SÍ puede consultar clientes', 'GET', '/customers', vendedor.token, 200],
         ['El vendedor SÍ puede consultar SU cartera', 'GET', '/payments/receivables', vendedor.token, 200],
-        ['El verificador SÍ puede consultar clientes', 'GET', '/customers', verificador.token, 200],
-        ['El verificador NO puede consultar la cartera', 'GET', '/payments/receivables', verificador.token, 403],
-        ['El verificador NO puede registrar pagos', 'POST', '/payments', verificador.token, 403],
+        ['El segundo cobrador SÍ puede consultar clientes', 'GET', '/customers', cobrador2.token, 200],
+        ['El segundo cobrador SÍ puede consultar la cartera', 'GET', '/payments/receivables', cobrador2.token, 200],
+        ['El segundo cobrador SÍ puede consultar pagos', 'GET', '/payments', cobrador2.token, 200],
+        ['El vendedor SÍ puede listar solicitudes de crédito (las propias)', 'GET', '/credit-applications', vendedor.token, 200],
+        ['El cobrador SÍ puede listar solicitudes de crédito (su sucursal)', 'GET', '/credit-applications', cobrador.token, 200],
+        ['Gerencia SÍ puede listar solicitudes de crédito', 'GET', '/credit-applications', gerencia.token, 200],
+        ['El cobrador NO puede crear solicitudes de crédito', 'POST', '/credit-applications', cobrador.token, 403],
+        ['Gerencia NO puede crear solicitudes de crédito', 'POST', '/credit-applications', gerencia.token, 403],
         ['Gerencia SÍ puede ver el panel de inicio', 'GET', '/dashboard', gerencia.token, 200],
         ['Gerencia NO puede consultar clientes', 'GET', '/customers', gerencia.token, 403],
         // Cambiado en el bloque 2A: Gerencia consulta el catálogo porque

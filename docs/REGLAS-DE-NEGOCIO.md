@@ -16,6 +16,12 @@ revisarlas una por una.
 
 ## 1. Precios
 
+> **Alcance (bloque 3.1).** R1 describe las reglas **históricas del módulo de
+> ventas** (`sales`), que siguen gobernando las ventas existentes y no se
+> reinterpretan. Las **solicitudes de crédito nuevas** usan las reglas
+> vigentes de la sección 9 (4 cuotas +40 %, etc.). Unificar el módulo de
+> ventas con las reglas vigentes es parte del bloque 3.3.
+
 ### R1 — Márgenes por modalidad ✅ DEFINIDA
 
 | Modalidad | Precio de venta | Pagos |
@@ -324,7 +330,7 @@ perfiles son los cinco actores con acceso al sistema de la Tabla 6:
 | `admin` | Administrador | Todo | Tabla 6; actor único de CUP-05; RN-0004 |
 | `vendedor` | Ventas | Clientes, catálogo (sin costos), ventas, y **cobranza de su propia cartera** | Tabla 6; CUP-01; §1.6.3 |
 | `cobrador` | Cobrador | Consulta de clientes y ventas, **cobranza completa** | Tabla 6; CUP-03; §1.6.3 |
-| `verificador` | Verificador | Consulta de clientes y ventas. Sus permisos propios llegan con REQ-0004 | Tabla 6; CUP-02 pasos 4-5 |
+| ~~`verificador`~~ | ~~Verificador~~ | **Eliminado en la migración 006** (decisión del propietario): la verificación es una función del Cobrador (`credits.verify`). Sus usuarios pasaron a `cobrador` sin perder historial | Tabla 6; CUP-02 pasos 4-5 |
 | `gerencia` | Gerencia | Solo el panel de inicio. Los reportes llegan con REQ-0013 | Tabla 6; CUP-04 |
 
 El sexto actor de la Tabla 6, **Cliente**, no es un rol del sistema: la propia
@@ -578,8 +584,8 @@ vendedor —eso es el bloque siguiente—. Hoy descuenta de la predeterminada.
 | `inventory.view`, `inventory.manage` | Administrador |
 | `inventory.view.own` | Administrador, **Ventas** |
 | `categories.manage`, `brands.manage` | Administrador |
-| `credits.view` | Administrador, Gerencia, Verificador |
-| `credits.verify` | Administrador, Verificador |
+| `credits.view` | Administrador, Gerencia *(actualizado en 006/007: significa **todas** las solicitudes)* |
+| `credits.verify` | Administrador, **Cobrador** *(006: antes Verificador)* |
 | `credits.decide` | Administrador, **Gerencia** — y nadie más |
 
 **Decisión cerrada (2026-09-11):** Cobros y Verificación **no tienen acceso
@@ -612,8 +618,9 @@ listar el catálogo no hay dónde consultar un costo.
 Gerencia **no** recibe permisos administrativos por ser Gerencia: sigue sin
 clientes, ventas, pagos, cobranza, usuarios, roles ni inventario.
 
-El **Verificador** verifica pero **no decide**: tiene `credits.verify` y
-explícitamente no `credits.decide`. La migración incluye una salvaguarda que
+El **Cobrador** verifica pero **no decide** (desde 006; antes lo hacía el
+rol Verificador, eliminado): tiene `credits.verify` y explícitamente no
+`credits.decide`. La migración incluye una salvaguarda que
 retira `credits.decide` de cualquier rol que no sea Administrador o
 Gerencia.
 
@@ -629,15 +636,127 @@ y los tres permisos ya registrados lo cubren:
 
 | Etapa | Permiso | Quién |
 | --- | --- | --- |
-| Solicitud y consulta | `credits.view` | Administración, Gerencia, Verificación |
-| Verificación | `credits.verify` | Administración, Verificación |
+| Solicitud y consulta | `credits.create`, `credits.view*` | Ver sección 9 (bloque 3.1) |
+| Verificación | `credits.verify` | Administración, **Cobrador** |
 | Evaluación y decisión | `credits.decide` | **Administración y Gerencia, nadie más** |
 
-Ventas no interviene en la decisión, y Verificación no decide: verifica.
+Ventas no interviene en la decisión, y el Cobrador no decide: verifica.
 
-**En este bloque no hay tablas, endpoints ni pantallas de crédito.** Solo el
-catálogo de permisos, para que la matriz de roles no haya que rehacerla
-después. La aplicación todavía no comprueba ninguno de los tres.
+*Nota histórica:* en el bloque 2A no había tablas ni endpoints de crédito.
+El estado actual está en la sección 9.
+
+---
+
+## 9. Créditos (bloque 3.1)
+
+### CR1 — Reglas comerciales vigentes para operaciones nuevas ✅ DEFINIDA
+
+| Tipo | Plazo | Recargo sobre costo |
+| --- | --- | --- |
+| Contado | 1 | +30 % |
+| PREDEFINIDO | 4 / 5 / 6 / 10 / 12 | +40 / +50 / +60 / +80 / +100 % |
+| ESPECIAL | 6 / 7 / 8 / 9 / 10 / 11 / 12 | +60 / +65 / +70 / +75 / +80 / +90 / +100 % |
+| ESPECIAL | más de 12 | +100 % y 10 puntos más por cada cuota adicional (13 → +110, 18 → +160, 24 → +220) |
+
+Viven en `backend/src/utils/creditPricing.js`. **No** reutilizan las reglas
+históricas de `utils/pricing.js` (+50 % en 4 pagos, +70 % en 8).
+
+- Un plan PREDEFINIDO de `product_financing_plans` debe tener exactamente el
+  porcentaje de la regla. La base de datos lo impide desde 007
+  (`product_financing_plans_predefined_rule`, `NOT VALID`: no revalida ni
+  borra planes anteriores). Si existiera un plan histórico fuera de regla, se
+  conserva, aparece en `v_financing_plans_out_of_rule` y el backend lo rechaza
+  (409) para solicitudes nuevas.
+- ESPECIAL no requiere plan: el precio mínimo es el de la fórmula.
+- Redondeo al centavo con el medio centavo hacia arriba (igual que R2).
+
+### CR2 — Precio unitario, cantidad y línea ✅ DEFINIDA (2026-09-16)
+
+`proposed_price` es **precio unitario**. Total de la línea = precio unitario ×
+cantidad. El precio mínimo también es unitario. La cuota de cada línea es
+(total de la línea ÷ cuotas), sin enganche.
+
+### CR3 — Enganche de la solicitud ✅ DEFINIDA (2026-09-16)
+
+El enganche **propuesto** pertenece al total de la solicitud y está **incluido**
+dentro del precio financiado; no se suma encima. No es un pago, no toca saldo,
+caja ni cuotas. Financiado = total − enganche. Cuota consolidada =
+financiado ÷ cuotas, **solo** si todas las líneas tienen el mismo plazo.
+
+✅ DEFINIDA (confirmada 2026-09-16): el enganche debe ser **estrictamente menor**
+que el total de la solicitud; igual o mayor se rechaza con 422.
+
+### CR3b — Mínimos efectivos ✅ DEFINIDA (2026-09-16, tras revisión)
+
+- **Precio mínimo PREDEFINIDO:** `product_financing_plans.minimum_price` no puede
+  ser menor que costo × (1 + porcentaje vigente). Ej.: costo Q1000 +40 % = Q1400;
+  Q1400 o más es válido, Q1399.99 se rechaza. Lo impone el trigger
+  `trg_product_financing_plans_minimum` (008) **solo en configuraciones nuevas o
+  al modificar precio, plazo, porcentaje o producto**; los planes existentes no se
+  revalidan ni se reescriben (se listan en `v_financing_plans_below_minimum`).
+  Si el costo sube después, la solicitud usa MAX(matemático con el costo actual,
+  configurado).
+- **Cuota mínima efectiva de la línea:** MAX(round(precio mínimo × cantidad ÷
+  cuotas), `minimum_installment` del plan × cantidad). `minimum_installment` se
+  interpreta **por unidad**, igual que `minimum_price`. En ESPECIAL no hay plan:
+  vale la matemática.
+- Se congelan el mínimo efectivo (`minimum_*_snapshot`) y lo configurado
+  (`configured_minimum_*_snapshot`). Las solicitudes anteriores no se recalculan.
+- Una línea con cuota por debajo de la cuota mínima efectiva queda marcada
+  `requires_installment_exception`; `requires_exception` = precio **o** cuota.
+- Confirmado (2026-09-16): `minimum_installment` es **por unidad**; ante una subida
+  de costo el plan **no** se bloquea y se usa el mayor de los dos mínimos.
+- Confirmado (2026-09-16): en solicitudes históricas estas marcas son solo
+  **informativas y calculadas** en las vistas con las reglas actuales; no se
+  modifica ni recalcula ningún dato almacenado.
+
+### CR4 — Excepción de precio por línea ✅ DEFINIDA (2026-09-16)
+
+Vender por debajo del mínimo se **permite registrar**, pero la línea queda
+marcada `requires_price_exception` (derivado, no almacenado) y la solicitud
+también. La autorización se dará por línea dentro de la única decisión de
+Administración o Gerencia (bloque 3.2).
+
+### CR5 — Alcance de consulta ✅ DEFINIDA (2026-09-16)
+
+| Rol | Permiso | Ve |
+| --- | --- | --- |
+| Vendedor | `credits.view.own` | Solo las solicitudes que creó (en cualquier estado) |
+| Cobrador | `credits.view.branch` | Las de **su sucursal** en `SOLICITADO` o `EN_VERIFICACION` |
+| Gerencia, Administrador | `credits.view` | Todas |
+
+El filtro va en el SQL. Una solicitud fuera de alcance responde **404** (no se
+confirma que exista). La sucursal del usuario se lee de la base de datos,
+nunca del token ni del request. No hay asignaciones manuales de cartera.
+
+⚠️ ASUMIDA: "disponible para verificación" = `SOLICITADO` o `EN_VERIFICACION`.
+
+### CR6 — Datos del cliente en la solicitud ✅ DEFINIDA
+
+Nombre, DPI, teléfonos, correo y dirección se copian **de la ficha**. Municipio
+y departamento también salen de la ficha cuando existen; el valor del
+formulario solo se usa si la ficha no los tiene. Los textos declarados en la
+solicitud (vivienda, empleo, referencias, fiador) se normalizan con N1; los
+teléfonos y el DPI del fiador solo se limpian. Un trigger `BEFORE INSERT`
+(007) aplica la misma normalización como red de seguridad; nunca reescribe
+solicitudes existentes.
+
+### CR7 — Doble envío ✅ DEFINIDA (criterio técnico)
+
+La cabecera opcional `Idempotency-Key` evita que un mismo envío se registre
+dos veces: repetir la clave devuelve la solicitud ya creada (200,
+`replayed: true`); reutilizarla con datos distintos responde 409. La clave es
+por usuario.
+
+⏳ PENDIENTE DE DISEÑO: impedir **por regla comercial** que un cliente tenga
+dos solicitudes abiertas (o iguales) no está definido y no se implementó.
+
+### CR8 — Errores HTTP ✅ DEFINIDA (criterio técnico)
+
+Datos inválidos 422 · cliente o producto inexistente 400 · cliente, producto,
+sucursal, plan o plazo no válidos 422 · plan fuera de regla o clave reutilizada
+409 · fuera de alcance o inexistente 404 · sin permiso 403 · sin sesión 401.
+Ninguno produce 500.
 
 ---
 
@@ -675,7 +794,8 @@ real y señala lo que hay que cambiar.
 | N3 | `notes`, `description`, municipio y departamento se guardan **normalizados** | |
 | I3 | El vendedor **no** ajusta inventario, ni siquiera el de su sucursal | |
 | I3 | El vendedor **sí** puede ver cuántas unidades hay en otras sucursales | |
-| PE2 | Gerencia **decide** créditos y **ve** costos; el Verificador **no** decide | |
+| PE2 | Gerencia **decide** créditos y **ve** costos; el Cobrador verifica y **no** decide | |
+| CR5 | "Por verificar" = `SOLICITADO` o `EN_VERIFICACION` (alcance del Cobrador) | |
 | S2 | La migración **no** asigna sucursal a los usuarios existentes | |
 | I2 | Trasladar stock fuera de la predeterminada lo deja **fuera** de las ventas | |
 | PE1 | Solo el **administrador** ve sucursales e inventario por sucursal | |

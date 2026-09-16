@@ -70,9 +70,10 @@ async function run() {
     const vendedor = await login('vendedor', DEMO_PASS);
     const cobrador = await login('cobrador', DEMO_PASS);
     const gerencia = await login('gerencia', DEMO_PASS);
-    const verificador = await login('verificador', DEMO_PASS);
-    check('Los usuarios de prueba de los cinco perfiles inician sesión',
-        Boolean(vendedor && cobrador && gerencia && verificador));
+    // El rol `verificador` ya no existe (006): la verificación es del Cobrador.
+    const cobrador2 = await login('cobrador2', DEMO_PASS);
+    check('Los usuarios de prueba de todos los perfiles inician sesión',
+        Boolean(vendedor && cobrador && gerencia && cobrador2));
 
     // ============================================================ 1. NORMALIZACIÓN
     console.log('\n[1] Normalización de clientes');
@@ -416,7 +417,7 @@ async function run() {
     const perfiles = [
         ['vendedor', vendedor],
         ['cobrador', cobrador],
-        ['verificador', verificador],
+        ['cobrador2', cobrador2],
         ['gerencia', gerencia],
     ];
 
@@ -449,7 +450,7 @@ async function run() {
         ['POST', '/inventory/adjust', { product_id: productoId, branch_id: sucursalId, delta: 1, reason: 'prueba' }],
         ['PUT', '/inventory/min-stock', { product_id: productoId, branch_id: sucursalId, min_stock: 1 }],
     ];
-    for (const [nombre, token] of [['cobrador', cobrador], ['verificador', verificador], ['gerencia', gerencia]]) {
+    for (const [nombre, token] of [['cobrador', cobrador], ['cobrador2', cobrador2], ['gerencia', gerencia]]) {
         for (const [metodo, ruta, cuerpo] of RUTAS_INVENTARIO) {
             const r = await api(metodo, ruta, cuerpo, token);
             check(`${nombre} NO puede ${metodo} ${ruta} (403)`, r.status === 403, `recibido ${r.status}`);
@@ -463,7 +464,7 @@ async function run() {
     }
 
     // Costos: Administración y Gerencia sí; el resto no (RN-0001).
-    for (const [nombre, token] of [['vendedor', vendedor], ['cobrador', cobrador], ['verificador', verificador]]) {
+    for (const [nombre, token] of [['vendedor', vendedor], ['cobrador', cobrador], ['cobrador2', cobrador2]]) {
         const r = await api('GET', `/products/${productoId}/cost-history`, null, token);
         check(`${nombre} NO puede ver el histórico de costos (403)`, r.status === 403, `recibido ${r.status}`);
     }

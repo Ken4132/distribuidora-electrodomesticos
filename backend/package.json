@@ -19,6 +19,7 @@
     "test:security": "node src/scripts/security-test.js",
     "test:normalize": "node src/scripts/normalize-test.js",
     "test:foundation": "node src/scripts/foundation-test.js",
+    "test:credits": "node src/scripts/credit-test.js",
     "n8n:receiver": "node src/scripts/n8n-receiver.js",
     "test:n8n": "node src/scripts/n8n-test.js"
   },
