@@ -20,6 +20,9 @@ import Audit from './pages/Audit.jsx';
 import Branches from './pages/Branches.jsx';
 import Inventory from './pages/Inventory.jsx';
 import Catalog from './pages/Catalog.jsx';
+import CreditApplications from './pages/CreditApplications.jsx';
+import NewCreditApplication from './pages/NewCreditApplication.jsx';
+import CreditApplicationDetail from './pages/CreditApplicationDetail.jsx';
 
 export default function App() {
     return (
@@ -48,6 +51,30 @@ export default function App() {
                                     element={
                                         <ProtectedRoute permission={['receivables.view', 'receivables.view.own']}>
                                             <Receivables />
+                                        </ProtectedRoute>
+                                    }
+                                />
+                                <Route
+                                    path="/creditos"
+                                    element={
+                                        <ProtectedRoute permission={['credits.view', 'credits.view.own', 'credits.view.branch']}>
+                                            <CreditApplications />
+                                        </ProtectedRoute>
+                                    }
+                                />
+                                <Route
+                                    path="/creditos/nueva"
+                                    element={
+                                        <ProtectedRoute permission="credits.create">
+                                            <NewCreditApplication />
+                                        </ProtectedRoute>
+                                    }
+                                />
+                                <Route
+                                    path="/creditos/:id"
+                                    element={
+                                        <ProtectedRoute permission={['credits.view', 'credits.view.own', 'credits.view.branch']}>
+                                            <CreditApplicationDetail />
                                         </ProtectedRoute>
                                     }
                                 />

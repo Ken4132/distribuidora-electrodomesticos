@@ -59,92 +59,7 @@ export async function createPayment(input, actor, scope) {
 
         if (sale.status === 'anulada') throw AppError.unprocessable('No se pueden registrar pagos en una venta anulada');
 
-        const pending = await Payment.lockPendingInstallments(client, sale.id);
-        const balanceCents = pending.reduce((acc, i) => acc + toCents(i.balance), 0);
-
-        if (balanceCents <= 0) {
-            throw AppError.conflict('Esta venta ya está totalmente pagada');
-        }
-
-        let amountCents = toCents(input.amount);
-        if (amountCents <= 0) throw AppError.unprocessable('El monto del pago debe ser mayor a cero');
-        if (amountCents > balanceCents) {
-            throw AppError.unprocessable(
-                `El pago (Q${fromCents(amountCents).toFixed(2)}) excede el saldo pendiente (Q${fromCents(
-                    balanceCents
-                ).toFixed(2)})`
-            );
-        }
-
-        const payment = await Payment.createPayment(client, {
-            sale_id: sale.id,
-            customer_id: sale.customer_id,
-            payment_date: paymentDate,
-            amount: money(fromCents(amountCents)),
-            method: input.method ?? 'efectivo',
-            reference: input.reference,
-            notes: input.notes,
-            created_by: userId,
-        });
-
-        // Asignación cuota por cuota
-        const allocations = [];
-        for (const installment of pending) {
-            if (amountCents <= 0) break;
-            const due = toCents(installment.balance);
-            const applied = Math.min(due, amountCents);
-            await Payment.allocate(client, payment.id, installment.id, money(fromCents(applied)));
-            allocations.push({ installment_number: installment.number, amount: money(fromCents(applied)) });
-            amountCents -= applied;
-        }
-
-        const remainingCents = balanceCents - toCents(payment.amount);
-        const fullyPaid = remainingCents <= 0;
-
-        await recordEvent(
-            {
-                type: EVENT_TYPES.PAYMENT_CREATED,
-                aggregate: 'payment',
-                aggregateId: payment.id,
-                payload: {
-                    payment_id: payment.id,
-                    receipt_number: `P-${String(payment.id).padStart(6, '0')}`,
-                    sale_id: sale.id,
-                    sale_number: `V-${String(sale.id).padStart(6, '0')}`,
-                    payment_date: paymentDate,
-                    amount: payment.amount,
-                    method: payment.method,
-                    allocations,
-                    remaining_balance: money(fromCents(Math.max(remainingCents, 0))),
-                    customer: {
-                        id: sale.customer_id,
-                        dpi: sale.dpi,
-                        full_name: sale.full_name,
-                        phone: sale.phone,
-                    },
-                },
-            },
-            client
-        );
-
-        if (fullyPaid) {
-            await recordEvent(
-                {
-                    type: EVENT_TYPES.SALE_PAID,
-                    aggregate: 'sale',
-                    aggregateId: sale.id,
-                    payload: {
-                        sale_id: sale.id,
-                        sale_number: `V-${String(sale.id).padStart(6, '0')}`,
-                        total: sale.total,
-                        paid_on: paymentDate,
-                        customer: { id: sale.customer_id, dpi: sale.dpi, full_name: sale.full_name, phone: sale.phone },
-                    },
-                },
-                client
-            );
-        }
-
+        await applyPaymentToSale(client, sale, { ...input, payment_date: paymentDate }, userId);
         return sale.id;
         });
     } catch (error) {
@@ -175,12 +90,122 @@ export async function createPayment(input, actor, scope) {
     return { sale, installments, payments };
 }
 
+/**
+ * Aplica un pago a una venta YA BLOQUEADA dentro de la transacción del
+ * llamador: bloquea sus cuotas, valida monto contra saldo, registra el pago,
+ * lo asigna FIFO (cuota más antigua primero, sin saltar ninguna) y deja los
+ * eventos `payment.created` / `sale.paid` en el outbox.
+ *
+ * Es el ÚNICO lugar donde se aplica dinero a cuotas: lo usan el cobro
+ * normal y el enganche real al concretar una venta de crédito (3.3).
+ *
+ * @param {object} sale  fila de la venta con customer_id, total, full_name, dpi, phone
+ * @param {object} input { amount, method, reference, notes, payment_date }
+ * @returns {Promise<{payment: object, allocations: object[], remainingCents: number}>}
+ */
+export async function applyPaymentToSale(client, sale, input, userId) {
+    const paymentDate = input.payment_date;
+
+    const pending = await Payment.lockPendingInstallments(client, sale.id);
+    const balanceCents = pending.reduce((acc, i) => acc + toCents(i.balance), 0);
+
+    if (balanceCents <= 0) {
+        throw AppError.conflict('Esta venta ya está totalmente pagada');
+    }
+
+    let amountCents = toCents(input.amount);
+    if (amountCents <= 0) throw AppError.unprocessable('El monto del pago debe ser mayor a cero');
+    if (amountCents > balanceCents) {
+        throw AppError.unprocessable(
+            `El pago (Q${fromCents(amountCents).toFixed(2)}) excede el saldo pendiente (Q${fromCents(
+                balanceCents
+            ).toFixed(2)})`
+        );
+    }
+
+    const payment = await Payment.createPayment(client, {
+        sale_id: sale.id,
+        customer_id: sale.customer_id,
+        payment_date: paymentDate,
+        amount: money(fromCents(amountCents)),
+        method: input.method ?? 'efectivo',
+        reference: input.reference,
+        notes: input.notes,
+        created_by: userId,
+    });
+
+    // Asignación cuota por cuota
+    const allocations = [];
+    for (const installment of pending) {
+        if (amountCents <= 0) break;
+        const due = toCents(installment.balance);
+        const applied = Math.min(due, amountCents);
+        await Payment.allocate(client, payment.id, installment.id, money(fromCents(applied)));
+        allocations.push({ installment_number: installment.number, amount: money(fromCents(applied)) });
+        amountCents -= applied;
+    }
+
+    const remainingCents = balanceCents - toCents(payment.amount);
+    const fullyPaid = remainingCents <= 0;
+
+    await recordEvent(
+        {
+            type: EVENT_TYPES.PAYMENT_CREATED,
+            aggregate: 'payment',
+            aggregateId: payment.id,
+            payload: {
+                payment_id: payment.id,
+                receipt_number: `P-${String(payment.id).padStart(6, '0')}`,
+                sale_id: sale.id,
+                sale_number: `V-${String(sale.id).padStart(6, '0')}`,
+                payment_date: paymentDate,
+                amount: payment.amount,
+                method: payment.method,
+                allocations,
+                remaining_balance: money(fromCents(Math.max(remainingCents, 0))),
+                customer: {
+                    id: sale.customer_id,
+                    dpi: sale.dpi,
+                    full_name: sale.full_name,
+                    phone: sale.phone,
+                },
+            },
+        },
+        client
+    );
+
+    if (fullyPaid) {
+        await recordEvent(
+            {
+                type: EVENT_TYPES.SALE_PAID,
+                aggregate: 'sale',
+                aggregateId: sale.id,
+                payload: {
+                    sale_id: sale.id,
+                    sale_number: `V-${String(sale.id).padStart(6, '0')}`,
+                    total: sale.total,
+                    paid_on: paymentDate,
+                    customer: { id: sale.customer_id, dpi: sale.dpi, full_name: sale.full_name, phone: sale.phone },
+                },
+            },
+            client
+        );
+    }
+
+    return { payment, allocations, remainingCents };
+}
+
 /** Anula un pago: las asignaciones se eliminan y el saldo vuelve a subir. */
 export async function voidPayment(id, reason) {
     const result = await withTransaction(async (client) => {
+        // Se bloquea la venta del pago (mismo orden de bloqueo que registrar un
+        // pago o anular la venta) para no cruzarse con esas operaciones.
+        const { rows: owner } = await client.query('SELECT sale_id FROM payments WHERE id = $1', [id]);
+        if (owner[0]) await client.query('SELECT id FROM sales WHERE id = $1 FOR UPDATE', [owner[0].sale_id]);
         const voided = await Payment.voidPayment(client, id, reason);
         if (!voided) throw AppError.conflict('El pago no existe o ya estaba anulado');
-        await client.query('DELETE FROM payment_allocations WHERE payment_id = $1', [id]);
+        // Las aplicaciones a cuotas NO se borran: quedan como historial. Las vistas
+        // (v_installments, v_sales) solo suman pagos en estado 'aplicado'.
         return voided.sale_id;
     });
     return Sale.findById(result);

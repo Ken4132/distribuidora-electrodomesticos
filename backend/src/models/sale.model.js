@@ -72,7 +72,7 @@ export async function findInstallments(saleId) {
 export async function findPayments(saleId) {
     const { rows } = await query(
         `SELECT p.id, p.payment_date, p.amount, p.method, p.reference, p.notes, p.status,
-                p.created_at, u.username AS created_by,
+                p.voided_at, p.void_reason, p.created_at, u.username AS created_by,
                 COALESCE(
                     json_agg(json_build_object('installment_number', i.number, 'amount', pa.amount)
                              ORDER BY i.number) FILTER (WHERE pa.id IS NOT NULL),
@@ -133,12 +133,30 @@ export async function createInstallment(client, saleId, { number, dueDate, amoun
     return rows[0];
 }
 
-export async function cancel(client, saleId, reason) {
+export async function cancel(client, saleId, reason, userId = null) {
     const { rows } = await client.query(
-        `UPDATE sales SET status = 'anulada', cancelled_at = now(), cancel_reason = $2
+        `UPDATE sales
+            SET status = 'anulada', cancelled_at = now(), cancel_reason = $2, cancelled_by = $3
           WHERE id = $1 AND status = 'activa'
          RETURNING id`,
-        [saleId, reason ?? null]
+        [saleId, reason ?? null, userId]
+    );
+    return rows[0] ?? null;
+}
+
+/**
+ * Expediente de la anulación (012): usuario, fecha, motivo, solicitud de
+ * origen, impacto económico y stock restituido. `null` si la venta está activa.
+ */
+export async function findCancellation(saleId) {
+    const { rows } = await query(
+        `SELECT sc.id, sc.reason, sc.cancelled_at, sc.sale_total, sc.credit_application_id,
+                sc.payments_voided_count, sc.payments_voided_amount, sc.down_payment_reverted,
+                sc.stock_restored, u.username AS cancelled_by_username
+           FROM sale_cancellations sc
+           LEFT JOIN users u ON u.id = sc.cancelled_by
+          WHERE sc.sale_id = $1`,
+        [saleId]
     );
     return rows[0] ?? null;
 }

@@ -25,7 +25,7 @@ export const listPaymentsSchema = pagination.extend({
 });
 
 export const voidPaymentSchema = z
-    .object({ reason: z.string().trim().min(3, 'Indica el motivo de la anulación').max(500) })
+    .object({ reason: z.string().trim().min(5, 'Indica el motivo de la anulación (al menos 5 caracteres)').max(500) })
     .strict();
 
 export const receivablesSchema = pagination.extend({

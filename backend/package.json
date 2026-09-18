@@ -20,6 +20,8 @@
     "test:normalize": "node src/scripts/normalize-test.js",
     "test:foundation": "node src/scripts/foundation-test.js",
     "test:credits": "node src/scripts/credit-test.js",
+    "test:credit-flow": "node src/scripts/credit-workflow-test.js",
+    "test:rate-limit": "node src/scripts/rate-limit-test.js",
     "n8n:receiver": "node src/scripts/n8n-receiver.js",
     "test:n8n": "node src/scripts/n8n-test.js"
   },

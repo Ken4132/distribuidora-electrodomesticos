@@ -58,6 +58,7 @@ async function getMap() {
 export function invalidatePermissionCache() {
     cache = null;
     loadedAt = 0;
+    userCache.clear();
 }
 
 /** Lista de permisos de un rol. Rol desconocido o inactivo -> sin permisos. */
@@ -81,4 +82,97 @@ export async function canAny(role, permissions) {
     const owned = map.get(role);
     if (!owned) return false;
     return permissions.some((p) => owned.has(p));
+}
+
+// ---------------------------------------------------------------------
+// PERMISOS ADICIONALES POR USUARIO (migración 012)
+//
+// El rol sigue siendo la base. `user_permissions` concede (GRANT) o retira
+// (REVOKE) permisos a UN usuario concreto, sin crear roles nuevos: es lo que
+// permite, por ejemplo, que un Cobrador venda y concrete sus propias ventas
+// sin convertir a TODOS los cobradores en vendedores.
+//
+//   permiso efectivo = permisos del rol + GRANT del usuario - REVOKE del usuario
+//
+// Se cachea por usuario con la misma vida corta que el mapa de roles y se
+// invalida en cuanto se concede o se retira un permiso.
+// ---------------------------------------------------------------------
+
+/** @type {Map<number, {granted: Set<string>, revoked: Set<string>, at: number}>} */
+const userCache = new Map();
+
+/** Anula la copia en memoria de un usuario (o de todos). */
+export function invalidateUserPermissionCache(userId = null) {
+    if (userId === null) userCache.clear();
+    else userCache.delete(Number(userId));
+}
+
+async function overridesFor(userId) {
+    const id = Number(userId);
+    if (!Number.isFinite(id)) return { granted: new Set(), revoked: new Set() };
+
+    const cached = userCache.get(id);
+    if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached;
+
+    const { rows } = await query(
+        'SELECT permission_code, effect FROM user_permissions WHERE user_id = $1',
+        [id]
+    );
+    const entry = { granted: new Set(), revoked: new Set(), at: Date.now() };
+    for (const row of rows) {
+        (row.effect === 'REVOKE' ? entry.revoked : entry.granted).add(row.permission_code);
+    }
+    userCache.set(id, entry);
+    return entry;
+}
+
+/**
+ * ¿ESTE usuario tiene el permiso? Es la comprobación que deben usar las rutas
+ * y los servicios: `can(role, ...)` solo mira el rol y se queda corta desde
+ * que existen los permisos por usuario.
+ *
+ * @param {{id?: number, role?: string}} user
+ */
+export async function userCan(user, permission) {
+    if (!user || !permission) return false;
+    const overrides = await overridesFor(user.id);
+    if (overrides.revoked.has(permission)) return false;
+    if (overrides.granted.has(permission)) return true;
+    return can(user.role, permission);
+}
+
+/** ¿AL MENOS UNO de estos permisos, contando los del usuario? */
+export async function userCanAny(user, permissions) {
+    if (!permissions?.length) return false;
+    for (const permission of permissions) {
+        if (await userCan(user, permission)) return true;
+    }
+    return false;
+}
+
+/** Permisos efectivos del usuario: los de su rol, ya ajustados. */
+export async function effectivePermissions(user) {
+    const [rolePermissions, overrides] = await Promise.all([
+        permissionsFor(user?.role),
+        overridesFor(user?.id),
+    ]);
+    const effective = new Set(rolePermissions);
+    for (const code of overrides.granted) effective.add(code);
+    for (const code of overrides.revoked) effective.delete(code);
+    return [...effective].sort();
+}
+
+/** Detalle de los permisos propios del usuario (para la pantalla de usuarios). */
+export async function userPermissionOverrides(userId) {
+    const { rows } = await query(
+        `SELECT up.permission_code, up.effect, up.reason, up.granted_at,
+                u.username AS granted_by_username, p.name AS permission_name, p.module
+           FROM user_permissions up
+           JOIN permissions p ON p.code = up.permission_code
+           LEFT JOIN users u ON u.id = up.granted_by
+          WHERE up.user_id = $1
+       ORDER BY up.permission_code`,
+        [userId]
+    );
+    return rows;
 }

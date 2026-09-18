@@ -19,6 +19,76 @@ const JWT_SECRET =
         ? required('JWT_SECRET')
         : process.env.JWT_SECRET || 'dev-only-insecure-secret-change-me';
 
+
+/**
+ * CONFIANZA EN EL PROXY (`trust proxy`)
+ *
+ * La IP del cliente es la clave de los limitadores, así que de qué IP hablamos
+ * es una decisión de seguridad, no un detalle. Express solo debe leer
+ * `X-Forwarded-For` cuando quien envía esa cabecera es un proxy NUESTRO:
+ * cualquiera puede escribir esa cabecera a mano y hacerse pasar por otra IP
+ * para saltarse el límite (o para que se bloquee a un tercero).
+ *
+ * Valores admitidos en TRUST_PROXY:
+ *
+ *   false | 0        No se lee ninguna cabecera. La IP es la del socket.
+ *   loopback         Se confía solo si quien conecta es 127.0.0.1 / ::1.
+ *                    Es lo correcto con nginx o Caddy en la MISMA máquina, y
+ *                    es el valor por defecto fuera de producción.
+ *   linklocal | uniquelocal   Subredes predefinidas de Express.
+ *   <número>         Número de saltos de proxy (p. ej. 1 = un balanceador).
+ *   <ip>,<cidr>,…    Direcciones o rangos concretos de nuestros proxys.
+ *                    Es la opción más segura cuando el proxy es remoto
+ *                    (p. ej. "10.0.0.0/8" o la IP del balanceador).
+ *
+ * `true` confía en CUALQUIER X-Forwarded-For y deja el límite en nada: se
+ * rechaza en producción y solo se acepta, con advertencia, fuera de ella.
+ *
+ * Por defecto en producción es `false`: preferimos que, mal configurado, el
+ * límite sea demasiado estricto (todos comparten la IP del proxy) y no que sea
+ * falsificable. El arranque avisa para que se configure de verdad.
+ */
+function parseTrustProxy(raw, isProd) {
+    const value = String(raw ?? '').trim();
+
+    if (value === '') {
+        if (isProd) {
+            console.warn(
+                '[config] TRUST_PROXY no está definida. Se usará `false`: si el backend corre detrás ' +
+                    'de un proxy o balanceador, TODOS los clientes se verán con la misma IP y el límite ' +
+                    'de login será demasiado estricto. Define TRUST_PROXY con la IP/rango de tu proxy.'
+            );
+            return false;
+        }
+        return 'loopback';
+    }
+
+    const lower = value.toLowerCase();
+    if (lower === 'false' || lower === '0') return false;
+    if (lower === 'true') {
+        if (isProd) {
+            throw new Error(
+                'TRUST_PROXY=true confiaría en cualquier cabecera X-Forwarded-For y permitiría falsificar ' +
+                    'la IP del cliente. En producción usa el número de saltos (p. ej. 1) o la IP/rango de tu proxy.'
+            );
+        }
+        console.warn('[config] TRUST_PROXY=true: cualquiera puede falsificar su IP. Solo para depurar.');
+        return true;
+    }
+    if (['loopback', 'linklocal', 'uniquelocal'].includes(lower)) return lower;
+    if (/^\d+$/.test(value)) return Number(value);
+
+    return value
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+}
+
+const positiveInt = (raw, fallback) => {
+    const value = Number(raw);
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+};
+
 export const config = {
     env: NODE_ENV,
     isProd: NODE_ENV === 'production',
@@ -36,6 +106,30 @@ export const config = {
     jwt: {
         secret: JWT_SECRET,
         expiresIn: process.env.JWT_EXPIRES_IN ?? '8h',
+    },
+
+    // Ver parseTrustProxy: de esto depende qué IP ve el limitador.
+    trustProxy: parseTrustProxy(process.env.TRUST_PROXY, NODE_ENV === 'production'),
+
+    /**
+     * LÍMITES DE PETICIONES (ver middleware/rateLimit.js).
+     *
+     * El login lleva dos frenos a la vez, y los dos cuentan SOLO intentos
+     * fallidos: por IP + usuario (el principal) y por IP (el global, más alto,
+     * para que cambiar de usuario no sea un atajo).
+     */
+    rateLimit: {
+        store: (process.env.RATE_LIMIT_STORE ?? 'memory').trim().toLowerCase(),
+        redisUrl: process.env.REDIS_URL ?? '',
+        login: {
+            windowMs: positiveInt(process.env.LOGIN_RATE_WINDOW_MS, 10 * 60 * 1000),
+            perUserLimit: positiveInt(process.env.LOGIN_RATE_LIMIT_USER, 10),
+            perIpLimit: positiveInt(process.env.LOGIN_RATE_LIMIT_IP, 50),
+        },
+        api: {
+            windowMs: positiveInt(process.env.API_RATE_WINDOW_MS, 60 * 1000),
+            limit: positiveInt(process.env.API_RATE_LIMIT, 300),
+        },
     },
 
     corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:5173')

@@ -165,6 +165,12 @@ Recorre la interfaz como una persona (24 verificaciones) y deja capturas en
 | `npm run db:reset` | **Borra el esquema completo.** Bloqueado en producción |
 | `npm run test:flow` | Prueba de humo del flujo completo (requiere la API levantada) |
 | `npm run test:n8n` | Prueba de integración del puente hacia n8n (se levanta sola) |
+| `npm run test:security` | Control de acceso y bitácora (requiere la API levantada y `seed`) |
+| `npm run test:foundation` | Sucursales, inventario, normalización y permisos (requiere la API levantada) |
+| `npm run test:normalize` | Normalización JS vs SQL (solo base de datos) |
+| `npm run test:credits` | Solicitudes de crédito: reglas, alcance, errores y doble envío (requiere la API levantada) |
+| `npm run test:credit-flow` | Flujo de crédito: reconfirmación, verificación, decisión, cancelación y venta concretada (requiere la API levantada) |
+| `npm run test:rate-limit` | Protección del login contra fuerza bruta (requiere la API levantada y `seed`) |
 | `npm run n8n:receiver` | Receptor local que simula el webhook de n8n |
 
 ### frontend
@@ -195,14 +201,20 @@ distribuidora-electrodomesticos/
 ├── database/
 │   ├── migrations/
 │   │   ├── 001_init.sql          esquema completo + vistas derivadas
-│   │   └── 002_outbox_dispatcher.sql   idempotencia, reintentos y trazas
+│   │   ├── 002_outbox_dispatcher.sql   idempotencia, reintentos y trazas
+│   │   ├── 003 … 006             roles/bitácora, sucursales, créditos, permisos
+│   │   ├── 007_credit_stabilization.sql  enganche, idempotencia, alcance y vistas de crédito
+│   │   ├── 008_credit_minimums.sql       mínimos configurados por plan
+│   │   ├── 009_credit_workflow.sql       verificación, decisión, excepciones, historiales
+│   │   ├── 010_credit_sales.sql          venta concretada desde la solicitud
+│   │   └── 011_credit_post_approval_changes.sql  modificación tras aprobar
 │   └── seeds/                    reservado para cargas de datos en SQL
 ├── backend/
 │   ├── .env.example              plantilla de configuración (sin secretos)
 │   ├── package.json
 │   └── src/
 │       ├── server.js             arranque y apagado ordenado
-│       ├── app.js                Express, CORS, helmet, rate limit
+│       ├── app.js                Express, CORS, helmet, límite general
 │       ├── config/               env.js · db.js (pool y transacciones)
 │       ├── routes/               definición de endpoints
 │       ├── controllers/          entrada/salida HTTP
@@ -308,6 +320,18 @@ Todos los endpoints cuelgan de `/api` y requieren
 | POST | `/integrations/dispatch` | Forzar el despacho ahora (admin) |
 | POST | `/integrations/collections/scan` | Forzar el barrido de cuotas (admin) |
 | GET | `/integrations/collections/preview` | Cuotas en la mira de cobranza (admin) |
+| GET | `/credit-applications` | Solicitudes de crédito con filtros (`status`, `branch_id`, `customer_id`, `created_by`, `financing_type`, `requires_price_exception`, `from`, `to`, `search`), limitadas por alcance |
+| POST | `/credit-applications` | Registrar solicitud de crédito (cabecera opcional `Idempotency-Key`) |
+| GET | `/credit-applications/:id` | Solicitud con líneas, verificaciones, decisión, excepciones e historiales (404 fuera de alcance) |
+| POST | `/credit-applications/quote` | Cotizar líneas y mínimos sin guardar |
+| POST | `/credit-applications/:id/verifications` | Registrar verificación (Cobrador; `conclude: true` la envía a evaluación) |
+| POST | `/credit-applications/:id/verifications/conclude` | Concluir la verificación |
+| PATCH | `/credit-applications/:id/conditions` | Modificar precio, plazo o enganche con historial, también ya aprobada (Administración/Gerencia) |
+| GET | `/credit-applications/:id/evaluation` | Solicitud + historial crediticio del cliente (Administración/Gerencia) |
+| POST | `/credit-applications/:id/decision` | Aprobar o rechazar, con autorización por línea bajo el mínimo |
+| POST | `/credit-applications/:id/cancel` | Cancelar con motivo |
+| POST | `/credit-applications/:id/concretize` | Crear la venta a crédito, cuotas y enganche real; activa el crédito |
+| GET/POST | `/customers/:id/confirmations` | Reconfirmaciones de datos del cliente |
 
 Respuesta correcta: `{ "ok": true, "data": … }`
 Respuesta de error: `{ "ok": false, "error": { "code", "message", "details" } }`
@@ -380,7 +404,9 @@ genera un `JWT_SECRET` propio y no reutilices las credenciales de ejemplo.
 | El puerto 4000 o 5173 está ocupado | Cambia `PORT` en `backend/.env` y `VITE_API_TARGET` / `VITE_PORT` en `frontend/.env`. |
 | Las fechas salen un día corridas | Revisa `APP_TIMEZONE`. Al cambiarla hay que actualizar también `app_today()` con una migración. |
 | Los eventos quedan en `pendiente` y no salen | El despacho está apagado. Revisa `N8N_DISPATCH_ENABLED` y `N8N_WEBHOOK_URL`, o mira la pantalla de Integraciones. Más casos en `docs/INTEGRACION-N8N.md`. |
-| `Demasiados intentos. Espera unos minutos.` | Protección contra fuerza bruta: 10 intentos de login cada 10 minutos. Espera, o reinicia el backend (el contador vive en memoria). Aparece sobre todo al repetir la prueba de navegador varias veces seguidas. |
+| `Demasiados intentos fallidos con este usuario.` | Protección contra fuerza bruta: 10 intentos **fallidos** por usuario y red cada 10 minutos. Solo afecta a ese usuario desde esa red; sus compañeros siguen entrando. Los inicios de sesión correctos no gastan contador. Se ajusta con `LOGIN_RATE_LIMIT_USER`. |
+| `Demasiados intentos fallidos desde esta red.` | Freno global: 50 intentos fallidos por IP cada 10 minutos, para que probar muchos usuarios distintos no sea un atajo. Se ajusta con `LOGIN_RATE_LIMIT_IP`. |
+| Todos los empleados de la oficina se bloquean a la vez | Falta configurar `TRUST_PROXY`. Detrás de un proxy sin configurar, el backend ve a todos con la misma IP. Define `TRUST_PROXY` con la IP o el rango de tu proxy (o `loopback` si está en la misma máquina). **Nunca `true`**: confiaría en cualquier `X-Forwarded-For` y la IP sería falsificable; en producción el arranque lo rechaza. |
 
 ---
 

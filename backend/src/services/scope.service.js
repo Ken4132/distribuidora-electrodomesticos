@@ -23,11 +23,12 @@
  * negocio (2026-09-11), y una venta cuyo `created_by` es NULL —porque la
  * cuenta que la registró fue eliminada— no pertenece a la cartera de nadie.
  */
-import { can } from './authorization.service.js';
+import { userCan } from './authorization.service.js';
 import { query } from '../config/db.js';
 
 /** Modalidades que forman parte de una cartera de cobranza. */
-export const CREDIT_MODES = Object.freeze(['credito_4', 'credito_8']);
+// `credito` (010): ventas concretadas desde una solicitud aprobada.
+export const CREDIT_MODES = Object.freeze(['credito_4', 'credito_8', 'credito']);
 
 /**
  * Resuelve el alcance de un usuario para un par de permisos.
@@ -37,8 +38,8 @@ export const CREDIT_MODES = Object.freeze(['credito_4', 'credito_8']);
  */
 export async function resolveScope(user, globalPermission, ownPermission) {
     if (!user) return null;
-    if (await can(user.role, globalPermission)) return { global: true, userId: user.id ?? null };
-    if (await can(user.role, ownPermission)) return { global: false, userId: user.id ?? null };
+    if (await userCan(user, globalPermission)) return { global: true, userId: user.id ?? null };
+    if (await userCan(user, ownPermission)) return { global: false, userId: user.id ?? null };
     return null;
 }
 
@@ -136,15 +137,15 @@ export async function branchOfUser(userId) {
  */
 export async function inventoryScope(user) {
     if (!user) return null;
-    if (await can(user.role, 'inventory.view')) return { global: true, branchId: null };
-    if (await can(user.role, 'inventory.view.own')) {
+    if (await userCan(user, 'inventory.view')) return { global: true, branchId: null };
+    if (await userCan(user, 'inventory.view.own')) {
         return { global: false, branchId: await branchOfUser(user.id) };
     }
     return null;
 }
 
 /** ¿Puede este usuario administrar existencias? Solo el permiso global. */
-export const canManageInventory = (user) => can(user?.role, 'inventory.manage');
+export const canManageInventory = (user) => userCan(user, 'inventory.manage');
 
 /**
  * Resuelve la sucursal sobre la que se va a CONSULTAR.

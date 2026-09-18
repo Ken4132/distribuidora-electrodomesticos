@@ -1,22 +1,21 @@
 import { Router } from 'express';
-import rateLimit from 'express-rate-limit';
 import * as ctrl from '../controllers/auth.controller.js';
 import { validate } from '../middleware/validate.js';
 import { requireAuth } from '../middleware/auth.js';
+import { loginLimiters } from '../middleware/rateLimit.js';
 import { loginSchema } from '../validators/auth.schema.js';
 
 const router = Router();
 
-// Freno a los intentos de fuerza bruta sobre el login.
-const loginLimiter = rateLimit({
-    windowMs: 10 * 60 * 1000,
-    limit: 10,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { ok: false, error: { code: 'RATE_LIMITED', message: 'Demasiados intentos. Espera unos minutos.' } },
-});
-
-router.post('/login', loginLimiter, validate({ body: loginSchema }), ctrl.login);
+/**
+ * Freno a la fuerza bruta sobre el login. Dos limitadores a la vez:
+ * por IP + usuario (principal) y por IP (global, más alto). Ambos cuentan
+ * SOLO los intentos fallidos. Ver middleware/rateLimit.js.
+ *
+ * Van ANTES de `validate`: un cuerpo mal formado también es un intento y
+ * también cuenta; si no, bastaría con enviar basura para no gastar contador.
+ */
+router.post('/login', ...loginLimiters, validate({ body: loginSchema }), ctrl.login);
 router.get('/me', requireAuth, ctrl.me);
 router.post('/logout', requireAuth, ctrl.logout);
 

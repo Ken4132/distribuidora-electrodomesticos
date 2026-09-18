@@ -1,7 +1,7 @@
 import * as service from '../services/sale.service.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { PAYMENT_MODES } from '../utils/pricing.js';
-import { can } from '../services/authorization.service.js';
+import { userCan } from '../services/authorization.service.js';
 import { hideCostUnlessAllowed } from '../utils/visibility.js';
 
 /**
@@ -9,7 +9,7 @@ import { hideCostUnlessAllowed } from '../utils/visibility.js';
  * trazabilidad necesaria en la base de datos, pero no debe salir hacia
  * quien no tiene permiso de ver costos.
  */
-const maySeeCost = (req) => can(req.user?.role, 'products.cost.view');
+const maySeeCost = (req) => userCan(req.user, 'products.cost.view');
 
 export const list = asyncHandler(async (req, res) => {
     const result = await service.listSales(req.validatedQuery);
@@ -61,6 +61,10 @@ export const paymentModes = asyncHandler(async (req, res) => {
             label: m.label,
             installments: m.installments,
             price_field: m.priceField,
+            // `legacy` = solo para ventas históricas. Desde el bloque 3.3 una
+            // venta a crédito nueva nace de una solicitud aprobada, así que el
+            // formulario no debe ofrecer estas modalidades.
+            legacy: Boolean(m.legacy),
             ...(allowed ? { markup: m.markup, markup_percent: Math.round(m.markup * 100) } : {}),
         })),
     });

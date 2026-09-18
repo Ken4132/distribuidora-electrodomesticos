@@ -34,11 +34,21 @@ function check(name, condition, extra = '') {
     }
 }
 
+/**
+ * Cada suite se presenta como un cliente distinto (su propia IP simulada), igual
+ * que lo serían dos sucursales. El limitador de login NO se desactiva ni se
+ * relaja: sigue contando igual que en producción, y el backend solo hace caso
+ * de esta cabecera cuando quien conecta es de confianza según TRUST_PROXY.
+ * Gracias a esto varias suites corren seguidas sin reiniciar el backend.
+ */
+const SUITE_IP = '198.18.10.3';
+
 async function api(method, path, body, token) {
     const res = await fetch(BASE + path, {
         method,
         headers: {
             'Content-Type': 'application/json',
+            'X-Forwarded-For': SUITE_IP,
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
@@ -520,9 +530,14 @@ async function run() {
     check('El vendedor sigue sin poder listar usuarios (403)', sinUsuarios.status === 403,
         `recibido ${sinUsuarios.status}`);
 
-    const soloDashboard = await api('GET', '/sales', null, gerencia);
-    check('Gerencia sigue limitada al panel (403 en ventas)', soloDashboard.status === 403,
-        `recibido ${soloDashboard.status}`);
+    // Corrección final 3.2/3.3 §6: Gerencia consulta ventas (supervisión,
+    // revisión, concreción, anulación y auditoría). Sigue SIN cartera ni pagos.
+    const ventasGerencia = await api('GET', '/sales', null, gerencia);
+    check('Gerencia SÍ consulta ventas (200)', ventasGerencia.status === 200,
+        `recibido ${ventasGerencia.status}`);
+    const carteraGerencia = await api('GET', '/payments/receivables', null, gerencia);
+    check('Gerencia sigue sin cobranza (403 en cartera)', carteraGerencia.status === 403,
+        `recibido ${carteraGerencia.status}`);
 
     const dashboard = await api('GET', '/dashboard', null, gerencia);
     check('Gerencia conserva el acceso al panel', dashboard.status === 200, `recibido ${dashboard.status}`);

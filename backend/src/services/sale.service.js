@@ -2,24 +2,34 @@ import { withTransaction, query } from '../config/db.js';
 import * as Sale from '../models/sale.model.js';
 import * as Product from '../models/product.model.js';
 import { AppError } from '../utils/AppError.js';
-import { installmentsFor, priceFieldFor, PAYMENT_MODES } from '../utils/pricing.js';
+import { installmentsFor, priceFieldFor, isLegacyPaymentMode, PAYMENT_MODES } from '../utils/pricing.js';
 import { money, sumMoney, splitInstallments, toCents } from '../utils/money.js';
 import { today, buildDueDates, isIsoDate } from '../utils/dates.js';
 import { recordEvent, EVENT_TYPES, dispatchInBackground } from './events.service.js';
 
 export const listSales = (opts) => Sale.list(opts);
 
+/**
+ * `credito_4` y `credito_8` se conservan para las ventas históricas: se leen,
+ * se cobran y se consultan igual que siempre. Lo que ya no se puede es
+ * registrar una venta NUEVA con ellas.
+ */
+const LEGACY_MODE_MESSAGE =
+    'Las modalidades credito_4 y credito_8 solo se conservan para las ventas históricas. ' +
+    'Una venta a crédito nueva se registra concretando una solicitud de crédito aprobada.';
+
 export async function getSale(id) {
     const sale = await Sale.findById(id);
     if (!sale) throw AppError.notFound('Venta no encontrada');
 
-    const [items, installments, payments] = await Promise.all([
+    const [items, installments, payments, cancellation] = await Promise.all([
         Sale.findItems(id),
         Sale.findInstallments(id),
         Sale.findPayments(id),
+        Sale.findCancellation(id),
     ]);
 
-    return { ...sale, items, installments, payments };
+    return { ...sale, items, installments, payments, cancellation };
 }
 
 /**
@@ -93,6 +103,14 @@ export async function createSale(input, userId) {
     const saleDate = input.sale_date && isIsoDate(input.sale_date) ? input.sale_date : today();
 
     if (!PAYMENT_MODES[payment_mode]) throw AppError.badRequest('Modalidad de pago inválida');
+    // BLOQUE 3.3: una venta a crédito NUEVA nace siempre de una solicitud
+    // aprobada y se registra al concretarla. Se comprueba aquí, en el
+    // servicio, y no solo en el validador ni en el formulario: es la capa que
+    // no se puede saltar llamando a la API directamente. La base de datos lo
+    // vuelve a impedir con `trg_sales_credit_origin` (012).
+    if (isLegacyPaymentMode(payment_mode)) {
+        throw AppError.unprocessable(LEGACY_MODE_MESSAGE, { payment_mode });
+    }
     if (!items?.length) throw AppError.badRequest('La venta debe incluir al menos un producto');
 
     // Consolida líneas repetidas del mismo producto en una sola.
@@ -234,21 +252,94 @@ export async function createSale(input, userId) {
     return getSale(result);
 }
 
-/** Anula una venta y devuelve el stock. No se permite si ya tiene pagos. */
+/**
+ * ANULACIÓN DE VENTA (decisiones del propietario, 2026-09-17).
+ *
+ *   VENTA ACTIVA -> motivo obligatorio -> solo Administración o Gerencia
+ *                -> reversión económica -> devolución de stock -> ANULADA
+ *
+ *   * Sin pagos aplicados: se anula y el stock vuelve a la sucursal de la que
+ *     salió cada producto en ESTA venta (nunca a otra).
+ *   * Con pagos: primero se anulan los pagos por su propio proceso formal y
+ *     auditado (`PATCH /payments/:id/void`, Administración); recién entonces
+ *     se puede anular la venta. Incluye el enganche de un crédito, que es un
+ *     pago como cualquier otro.
+ *   * Nada se borra: la venta queda 'anulada', los pagos anulados conservan
+ *     sus aplicaciones a cuotas, y cuotas y líneas se conservan íntegras.
+ *   * La solicitud de crédito de origen pasa a VENTA_ANULADA: sale de la
+ *     cartera activa y del control de regularización, conserva todo su
+ *     historial y no se puede reutilizar para otra venta.
+ *
+ * CONCURRENCIA: la venta se bloquea con FOR UPDATE antes de comprobar nada.
+ * Registrar un pago bloquea esa misma fila (payment.service), así que un pago
+ * no puede colarse entre la comprobación y la anulación: o entra antes (y
+ * entonces la anulación falla con 409) o espera y encuentra la venta anulada
+ * (y falla con 422).
+ */
 export async function cancelSale(id, reason, userId) {
-    const sale = await Sale.findById(id);
-    if (!sale) throw AppError.notFound('Venta no encontrada');
-    if (sale.status === 'anulada') throw AppError.conflict('La venta ya está anulada');
-    if (toCents(sale.paid_amount) > 0) {
-        throw AppError.conflict(
-            'No se puede anular una venta con pagos aplicados. Anula primero los pagos.'
-        );
-    }
-
     await withTransaction(async (client) => {
-        await Sale.cancel(client, id, reason);
+        const { rows: locked } = await client.query(
+            `SELECT id, status, total, credit_application_id
+               FROM sales WHERE id = $1 FOR UPDATE`,
+            [id]
+        );
+        const sale = locked[0];
+        if (!sale) throw AppError.notFound('Venta no encontrada');
+        if (sale.status === 'anulada') throw AppError.conflict('La venta ya está anulada');
+
+        const { rows: paid } = await client.query(
+            `SELECT COUNT(*)::int AS payments, COALESCE(SUM(amount), 0)::NUMERIC(12, 2) AS amount
+               FROM payments WHERE sale_id = $1 AND status = 'aplicado'`,
+            [id]
+        );
+        if (paid[0].payments > 0) {
+            throw AppError.conflict(
+                `No se puede anular una venta con pagos aplicados (${paid[0].payments} pago(s) por Q${paid[0].amount}). Anula primero los pagos.`,
+                { reason: 'PAYMENTS_MUST_BE_VOIDED_FIRST', pagos: paid[0].payments, monto: paid[0].amount }
+            );
+        }
+
+        // Impacto económico ya revertido: pagos anulados de esta venta.
+        const { rows: reverted } = await client.query(
+            `SELECT COUNT(*)::int AS payments, COALESCE(SUM(amount), 0)::NUMERIC(12, 2) AS amount
+               FROM payments WHERE sale_id = $1 AND status = 'anulado'`,
+            [id]
+        );
+
+        await Sale.cancel(client, id, reason, userId);
+
+        // El stock vuelve a la sucursal de la que salió cada producto en ESTA venta.
+        const { rows: exits } = await client.query(
+            `SELECT product_id, branch_id, SUM(quantity)::int AS quantity
+               FROM stock_movements
+              WHERE sale_id = $1 AND movement = 'salida'
+           GROUP BY product_id, branch_id
+           ORDER BY product_id, branch_id`,
+            [id]
+        );
+        const restored = [];
+        const returned = new Set();
+        for (const exit of exits) {
+            returned.add(Number(exit.product_id));
+            await Product.adjustStock(client, {
+                productId: exit.product_id,
+                delta: exit.quantity,
+                reason: 'anulacion_venta',
+                saleId: id,
+                userId,
+                branchId: exit.branch_id,
+            });
+            restored.push({
+                product_id: Number(exit.product_id),
+                branch_id: exit.branch_id === null ? null : Number(exit.branch_id),
+                quantity: exit.quantity,
+            });
+        }
+        // Ventas sin movimiento de salida registrado (no debería ocurrir): se
+        // conserva el comportamiento anterior (sucursal predeterminada).
         const items = await Sale.findItems(id);
         for (const item of items) {
+            if (returned.has(Number(item.product_id))) continue;
             await Product.adjustStock(client, {
                 productId: item.product_id,
                 delta: item.quantity,
@@ -256,13 +347,76 @@ export async function cancelSale(id, reason, userId) {
                 saleId: id,
                 userId,
             });
+            restored.push({ product_id: Number(item.product_id), branch_id: null, quantity: item.quantity });
         }
+
+        // SOLICITUD DE CRÉDITO DE ORIGEN: pasa a VENTA_ANULADA.
+        let downPaymentReverted = '0.00';
+        if (sale.credit_application_id) {
+            const { rows: apps } = await client.query(
+                'SELECT id, status, actual_down_payment FROM credit_applications WHERE id = $1 FOR UPDATE',
+                [sale.credit_application_id]
+            );
+            const application = apps[0];
+            if (application) {
+                downPaymentReverted = application.actual_down_payment ?? '0.00';
+                if (application.status === 'ACTIVO' || application.status === 'VENTA_CONCRETADA') {
+                    await client.query(
+                        `UPDATE credit_applications
+                            SET status = 'VENTA_ANULADA', sale_cancelled_at = now()
+                          WHERE id = $1`,
+                        [application.id]
+                    );
+                    await client.query(
+                        `INSERT INTO credit_application_status_history
+                             (credit_application_id, from_status, to_status, changed_by, reason)
+                         VALUES ($1, $2, 'VENTA_ANULADA', $3, $4)`,
+                        [
+                            application.id,
+                            application.status,
+                            userId,
+                            `Venta V-${String(id).padStart(6, '0')} anulada: ${reason ?? 'sin motivo'}`,
+                        ]
+                    );
+                }
+            }
+        }
+
+        // Expediente de la anulación: usuario, fecha, motivo, venta, solicitud,
+        // impacto económico y stock restituido.
+        await client.query(
+            `INSERT INTO sale_cancellations
+                 (sale_id, credit_application_id, reason, cancelled_by, sale_total,
+                  payments_voided_count, payments_voided_amount, down_payment_reverted, stock_restored)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)`,
+            [
+                id,
+                sale.credit_application_id ?? null,
+                reason,
+                userId,
+                sale.total,
+                reverted[0].payments,
+                reverted[0].amount,
+                downPaymentReverted,
+                JSON.stringify(restored),
+            ]
+        );
+
         await recordEvent(
             {
                 type: EVENT_TYPES.SALE_CANCELLED,
                 aggregate: 'sale',
                 aggregateId: id,
-                payload: { sale_id: id, reason: reason ?? null },
+                payload: {
+                    sale_id: id,
+                    reason: reason ?? null,
+                    credit_application_id: sale.credit_application_id ? Number(sale.credit_application_id) : null,
+                    total: sale.total,
+                    payments_voided_count: reverted[0].payments,
+                    payments_voided_amount: reverted[0].amount,
+                    down_payment_reverted: downPaymentReverted,
+                    stock_restored: restored,
+                },
             },
             client
         );

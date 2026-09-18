@@ -35,7 +35,9 @@ export function usePaymentModes() {
         };
     }, []);
 
-    return { modes, error };
+    // `modes` son todas (incluidas las históricas, para poder mostrar una venta
+    // antigua); `newSaleModes` son las que admite una venta NUEVA.
+    return { modes, newSaleModes: modes.filter((m) => !m.legacy), error };
 }
 
 /** Precio de venta de un producto según la modalidad, usando la regla del backend. */

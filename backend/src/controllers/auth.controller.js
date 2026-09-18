@@ -3,7 +3,7 @@ import * as User from '../models/user.model.js';
 import { signToken } from '../middleware/auth.js';
 import { AppError } from '../utils/AppError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { permissionsFor } from '../services/authorization.service.js';
+import { effectivePermissions } from '../services/authorization.service.js';
 import { recordAudit, actorFrom } from '../services/audit.service.js';
 
 export const login = asyncHandler(async (req, res) => {
@@ -45,7 +45,7 @@ export const login = asyncHandler(async (req, res) => {
     }
 
     const token = signToken(user);
-    const permissions = await permissionsFor(user.role);
+    const permissions = await effectivePermissions(user);
 
     await User.touchLastLogin(user.id);
     await recordAudit({
@@ -84,7 +84,7 @@ export const me = asyncHandler(async (req, res) => {
     if (!user) throw AppError.unauthorized('Sesión inválida');
     if (!user.is_active) throw AppError.forbidden('El usuario está desactivado');
 
-    const permissions = await permissionsFor(user.role);
+    const permissions = await effectivePermissions(user);
     res.json({ ok: true, data: { ...user, permissions } });
 });
 

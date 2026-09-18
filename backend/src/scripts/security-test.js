@@ -35,11 +35,21 @@ function check(name, condition, extra = '') {
     }
 }
 
+/**
+ * Cada suite se presenta como un cliente distinto (su propia IP simulada), igual
+ * que lo serían dos sucursales. El limitador de login NO se desactiva ni se
+ * relaja: sigue contando igual que en producción, y el backend solo hace caso
+ * de esta cabecera cuando quien conecta es de confianza según TRUST_PROXY.
+ * Gracias a esto varias suites corren seguidas sin reiniciar el backend.
+ */
+const SUITE_IP = '198.18.10.2';
+
 async function api(method, path, { body, token } = {}) {
     const res = await fetch(BASE + path, {
         method,
         headers: {
             'Content-Type': 'application/json',
+            'X-Forwarded-For': SUITE_IP,
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
@@ -55,7 +65,86 @@ async function api(method, path, { body, token } = {}) {
 
 async function login(username, password) {
     const res = await api('POST', '/auth/login', { body: { username, password } });
-    return { token: res.body?.data?.token ?? '', permissions: res.body?.data?.permissions ?? [], status: res.status };
+    return {
+        token: res.body?.data?.token ?? '',
+        permissions: res.body?.data?.permissions ?? [],
+        id: res.body?.data?.user?.id ?? res.body?.data?.id ?? null,
+        status: res.status,
+    };
+}
+
+/**
+ * VENTA HISTÓRICA A CRÉDITO de un vendedor concreto.
+ *
+ * Desde el bloque 3.3 `POST /sales` ya no registra ventas nuevas con
+ * credito_4 / credito_8: un crédito nuevo nace de una solicitud APROBADA.
+ * Las ventas a crédito que YA existen conservan su dueño y su cartera, y eso
+ * es lo que comprueba esta sección (regla U6). La prueba las inserta como
+ * fixture con los mismos modelos y utilidades del servicio histórico.
+ */
+async function ventaHistoricaACredito({ customerId, productId, createdBy, quantity = 1, mode = 'credito_4' }) {
+    const { pool } = await import('../config/db.js');
+    const Sale = await import('../models/sale.model.js');
+    const Product = await import('../models/product.model.js');
+    const { money, splitInstallments, toCents } = await import('../utils/money.js');
+    const { buildDueDates, today } = await import('../utils/dates.js');
+    const { installmentsFor, priceFieldFor } = await import('../utils/pricing.js');
+
+    const priceField = priceFieldFor(mode);
+    const count = installmentsFor(mode);
+    const date = today();
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const { rows: products } = await client.query(
+            `SELECT id, code, name, cost, ${priceField} AS unit_price FROM products WHERE id = $1 FOR UPDATE`,
+            [productId]
+        );
+        const product = products[0];
+        const total = money((toCents(product.unit_price) * quantity) / 100);
+        const sale = await Sale.createSale(client, {
+            customer_id: customerId,
+            sale_date: date,
+            payment_mode: mode,
+            installments_count: count,
+            subtotal: total,
+            total,
+            notes: 'Venta histórica (fixture de la prueba de seguridad)',
+            created_by: createdBy,
+        });
+        await Sale.createItem(client, sale.id, {
+            product_id: Number(product.id),
+            product_code: product.code,
+            product_name: product.name,
+            quantity,
+            unit_cost: product.cost,
+            unit_price: product.unit_price,
+            line_total: total,
+        });
+        await Product.adjustStock(client, {
+            productId: Number(product.id),
+            delta: -quantity,
+            reason: 'venta',
+            saleId: sale.id,
+            userId: createdBy,
+        });
+        const amounts = splitInstallments(total, count);
+        const dueDates = buildDueDates(date, count);
+        for (let i = 0; i < count; i += 1) {
+            await Sale.createInstallment(client, sale.id, {
+                number: i + 1,
+                dueDate: dueDates[i],
+                amount: money(amounts[i]),
+            });
+        }
+        await client.query('COMMIT');
+        return Number(sale.id);
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
 }
 
 const stamp = Date.now().toString().slice(-6);
@@ -237,7 +326,9 @@ async function main() {
         // Cambiado en el bloque 2A: Gerencia consulta el catálogo porque
         // tiene que poder consultar costos e histórico de costos.
         ['Gerencia SÍ puede consultar productos', 'GET', '/products', gerencia.token, 200],
-        ['Gerencia NO puede consultar ventas', 'GET', '/sales', gerencia.token, 403],
+        // Corrección final 3.2/3.3 §6: Gerencia consulta ventas (supervisión,
+        // revisión, concreción, anulación y auditoría). Sigue SIN pagos ni cartera.
+        ['Gerencia SÍ puede consultar ventas', 'GET', '/sales', gerencia.token, 200],
         ['Gerencia NO puede consultar pagos', 'GET', '/payments', gerencia.token, 403],
         ['Gerencia NO puede consultar la cartera', 'GET', '/payments/receivables', gerencia.token, 403],
         ['El administrador SÍ puede ver la bitácora', 'GET', '/audit', admin.token, 200],
@@ -276,7 +367,10 @@ async function main() {
         check('El vendedor registra un cliente', cliente.status === 201, JSON.stringify(cliente.body?.error ?? {}));
         const clienteId = cliente.body?.data?.id;
 
-        const ventaPropia = await api('POST', '/sales', {
+        // Una venta a crédito NUEVA ya no se registra por aquí: nace de una
+        // solicitud aprobada. Se comprueba, y las de la cartera se insertan
+        // como ventas históricas del vendedor que las registró en su día.
+        const intentoCredito = await api('POST', '/sales', {
             token: vendedor.token,
             body: {
                 customer_id: clienteId,
@@ -284,19 +378,18 @@ async function main() {
                 items: [{ product_id: producto.id, quantity: 1 }],
             },
         });
-        check('El vendedor registra una venta a crédito', ventaPropia.status === 201, JSON.stringify(ventaPropia.body?.error ?? {}));
-        const ventaPropiaId = ventaPropia.body?.data?.id;
+        check('Una venta a crédito nueva no se registra en POST /sales (422)', intentoCredito.status === 422,
+            `estado ${intentoCredito.status}`);
 
-        const ventaAjena = await api('POST', '/sales', {
-            token: vendedor2.token,
-            body: {
-                customer_id: clienteId,
-                payment_mode: 'credito_4',
-                items: [{ product_id: producto.id, quantity: 1 }],
-            },
+        const ventaPropiaId = await ventaHistoricaACredito({
+            customerId: clienteId, productId: producto.id, createdBy: vendedor.id,
         });
-        check('El segundo vendedor registra otra venta a crédito', ventaAjena.status === 201, `estado ${ventaAjena.status}`);
-        const ventaAjenaId = ventaAjena.body?.data?.id;
+        check('Existe una venta histórica a crédito del primer vendedor', Number.isFinite(ventaPropiaId));
+
+        const ventaAjenaId = await ventaHistoricaACredito({
+            customerId: clienteId, productId: producto.id, createdBy: vendedor2.id,
+        });
+        check('Existe una venta histórica a crédito del segundo vendedor', Number.isFinite(ventaAjenaId));
 
         const ventaContado = await api('POST', '/sales', {
             token: vendedor.token,

@@ -133,3 +133,29 @@ export const setRolePermissionsSchema = z
         permissions: z.array(z.string().trim().max(60)).max(200),
     })
     .strict();
+
+/**
+ * PERMISOS ADICIONALES POR USUARIO (012).
+ * `GRANT` concede un permiso que el rol no trae; `REVOKE` retira uno que sí.
+ */
+export const setUserPermissionSchema = z
+    .object({
+        permission_code: z
+            .string()
+            .trim()
+            .min(3, 'Indica el permiso')
+            .max(60)
+            .regex(/^[a-z][a-z0-9.]*$/, 'Código de permiso inválido'),
+        effect: z.enum(['GRANT', 'REVOKE'], {
+            errorMap: () => ({ message: 'El efecto debe ser GRANT (conceder) o REVOKE (retirar)' }),
+        }),
+        reason: z.string().trim().min(5, 'Indica el motivo (al menos 5 caracteres)').max(500),
+    })
+    .strict();
+
+export const clearUserPermissionSchema = z
+    .object({
+        permission_code: z.string().trim().min(3).max(60),
+        reason: z.string().trim().min(5, 'Indica el motivo (al menos 5 caracteres)').max(500),
+    })
+    .strict();

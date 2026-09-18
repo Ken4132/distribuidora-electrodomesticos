@@ -65,6 +65,15 @@ export const createCustomerSchema = z
 
 export const updateCustomerSchema = createCustomerSchema.partial().strict();
 
+/**
+ * Reconfirmación de datos (regla 9): los campos enviados actualizan la ficha;
+ * los omitidos se conservan. Queda una copia fechada de la ficha resultante.
+ */
+export const confirmCustomerSchema = createCustomerSchema
+    .partial()
+    .extend({ confirmation_notes: optionalBusinessText(1000) })
+    .strict();
+
 export const listCustomersSchema = pagination.extend({
     search: z.string().trim().max(100).default(''),
     status: z.enum(['all', 'active', 'inactive']).default('all'),

@@ -34,7 +34,56 @@ export const PAYMENT_MODE_LABELS = {
     contado: 'Contado',
     credito_4: 'Crédito 4 pagos',
     credito_8: 'Crédito 8 pagos',
+    credito: 'Crédito',
 };
+
+export const CREDIT_STATUS_LABELS = {
+    SOLICITADO: 'Solicitado',
+    EN_VERIFICACION: 'En verificación',
+    EN_EVALUACION: 'En evaluación',
+    APROBADO: 'Aprobado',
+    VENTA_CONCRETADA: 'Venta concretada',
+    ACTIVO: 'Activo',
+    RECHAZADO: 'Rechazado',
+    CANCELADO: 'Cancelado',
+    VENTA_ANULADA: 'Venta anulada',
+};
+
+/** Estado de solicitud -> color de insignia existente. */
+export const CREDIT_STATUS_BADGE = {
+    SOLICITADO: 'pendiente',
+    EN_VERIFICACION: 'parcial',
+    EN_EVALUACION: 'parcial',
+    APROBADO: 'al_dia',
+    VENTA_CONCRETADA: 'pagada',
+    ACTIVO: 'pagada',
+    RECHAZADO: 'vencida',
+    CANCELADO: 'anulada',
+    VENTA_ANULADA: 'anulada',
+};
+
+export const CREDIT_TYPE_LABELS = {
+    NORMAL: 'Normal',
+    EXCEPCIONAL_CONTADO: 'Excepcional a precio de contado',
+};
+
+export const FINANCING_TYPE_LABELS = {
+    PREDEFINIDO: 'Predefinido',
+    ESPECIAL: 'Especial',
+    CONTADO_EXCEPCIONAL: 'Contado (excepcional)',
+};
+
+export const VERIFICATION_RESULT_LABELS = {
+    FAVORABLE: 'Favorable',
+    DESFAVORABLE: 'Desfavorable',
+    NECESITA_REVISION: 'Necesita revisión',
+};
+
+/** Clave única por intento de envío (cabecera Idempotency-Key). */
+export function newRequestKey() {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+    return `k${Date.now()}${Math.random().toString(36).slice(2, 12)}`;
+}
 
 export const ACCOUNT_STATUS_LABELS = {
     pendiente: 'Pendiente',

@@ -10,7 +10,7 @@
  * respuesta. Se hace aquí, en la ruta, y no dentro de cada servicio, para no
  * reescribir la firma de los servicios que ya funcionan y están probados.
  */
-import { can, canAny } from '../services/authorization.service.js';
+import { userCan, userCanAny } from '../services/authorization.service.js';
 import { recordAudit, actorFrom } from '../services/audit.service.js';
 import { AppError } from '../utils/AppError.js';
 
@@ -24,7 +24,7 @@ export function requirePermission(permission, options = {}) {
         try {
             if (!req.user) return next(AppError.unauthorized());
 
-            if (await can(req.user.role, permission)) return next();
+            if (await userCan(req.user, permission)) return next();
 
             await recordAudit({
                 actor: actorFrom(req),
@@ -35,7 +35,7 @@ export function requirePermission(permission, options = {}) {
                 result: 'denegado',
             });
 
-            return next(AppError.forbidden('Tu rol no tiene permiso para esta operación'));
+            return next(AppError.forbidden('Tu usuario no tiene permiso para esta operación'));
         } catch (error) {
             next(error);
         }
@@ -59,7 +59,7 @@ export function requireAnyPermission(...permissions) {
         try {
             if (!req.user) return next(AppError.unauthorized());
 
-            if (await canAny(req.user.role, permissions)) return next();
+            if (await userCanAny(req.user, permissions)) return next();
 
             await recordAudit({
                 actor: actorFrom(req),
@@ -70,7 +70,7 @@ export function requireAnyPermission(...permissions) {
                 result: 'denegado',
             });
 
-            return next(AppError.forbidden('Tu rol no tiene permiso para esta operación'));
+            return next(AppError.forbidden('Tu usuario no tiene permiso para esta operación'));
         } catch (error) {
             next(error);
         }

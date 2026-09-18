@@ -1,6 +1,6 @@
 import * as service from '../services/product.service.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { can } from '../services/authorization.service.js';
+import { userCan } from '../services/authorization.service.js';
 import { inventoryScope } from '../services/scope.service.js';
 import { productAvailability } from '../services/inventory.service.js';
 import { hideCostUnlessAllowed } from '../utils/visibility.js';
@@ -11,7 +11,7 @@ import { hideCostUnlessAllowed } from '../utils/visibility.js';
  * el servicio de ventas necesita el costo internamente para congelarlo en el
  * detalle de la venta.
  */
-const maySeeCost = (req) => can(req.user?.role, 'products.cost.view');
+const maySeeCost = (req) => userCan(req.user, 'products.cost.view');
 
 export const list = asyncHandler(async (req, res) => {
     const q = req.validatedQuery;

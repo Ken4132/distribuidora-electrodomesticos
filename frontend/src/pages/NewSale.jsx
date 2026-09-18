@@ -22,7 +22,7 @@ export default function NewSale() {
     const navigate = useNavigate();
     const [params] = useSearchParams();
 
-    const { modes } = usePaymentModes();
+    const { newSaleModes: modes } = usePaymentModes();
     const [customer, setCustomer] = useState(null);
     const [mode, setMode] = useState('contado');
     const [saleDate, setSaleDate] = useState(todayIso());
@@ -213,6 +213,10 @@ export default function NewSale() {
 
                     <section className="panel">
                         <h2 className="panel__title">3. Modalidad de pago</h2>
+                        <p className="hint">
+                            Una venta <strong>a crédito</strong> no se registra aquí: se genera al concretar una
+                            solicitud de crédito aprobada, desde <em>Créditos</em>.
+                        </p>
                         <div className="modes">
                             {modes.map((m) => (
                                 <button
@@ -301,7 +305,7 @@ export default function NewSale() {
     );
 }
 
-function CustomerPicker({ onPick }) {
+export function CustomerPicker({ onPick }) {
     const [term, setTerm] = useState('');
     const [results, setResults] = useState([]);
     const [loading, setLoading] = useState(false);

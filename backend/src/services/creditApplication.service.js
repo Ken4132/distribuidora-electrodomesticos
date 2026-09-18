@@ -2,10 +2,11 @@ import { createHash } from 'node:crypto';
 import { withTransaction } from '../config/db.js';
 import { config } from '../config/env.js';
 import * as model from '../models/creditApplication.model.js';
-import { can } from './authorization.service.js';
+import { userCan } from './authorization.service.js';
 import { AppError } from '../utils/AppError.js';
 import { normalizeSearch } from '../utils/normalize.js';
 import {
+    CASH_MARKUP_PERCENT,
     centsToMoney,
     divideHalfUp,
     effectiveMinimumInstallment,
@@ -32,6 +33,9 @@ import {
 
 const UNIQUE_REQUEST_CONSTRAINT = 'ux_credit_applications_request';
 
+/** Señal interna: la misma clave ya registró una solicitud (se devuelve esa). */
+class ReplaySignal extends Error {}
+
 // ---------------------------------------------------------------------
 // ALCANCE
 // ---------------------------------------------------------------------
@@ -48,15 +52,15 @@ const UNIQUE_REQUEST_CONSTRAINT = 'ux_credit_applications_request';
 export async function resolveViewScope(user) {
     if (!user?.id) throw AppError.unauthorized();
 
-    if (await can(user.role, 'credits.view')) {
+    if (await userCan(user, 'credits.view')) {
         return { global: true, own: false, branch: false, userId: user.id, branchId: null };
     }
 
     const [own, branch] = await Promise.all([
-        can(user.role, 'credits.view.own'),
-        can(user.role, 'credits.view.branch'),
+        userCan(user, 'credits.view.own'),
+        userCan(user, 'credits.view.branch'),
     ]);
-    if (!own && !branch) throw AppError.forbidden('Tu rol no tiene permiso para consultar solicitudes de crédito');
+    if (!own && !branch) throw AppError.forbidden('Tu usuario no tiene permiso para consultar solicitudes de crédito');
 
     let branchId = null;
     if (branch) {
@@ -84,7 +88,7 @@ export async function resolveViewScope(user) {
  *
  * Precios UNITARIOS; cuotas de la LÍNEA completa (precio x cantidad).
  */
-async function buildLine(item, client) {
+export async function buildLine(item, client, creditType = 'NORMAL') {
     const product = await model.getProductForApplication(item.product_id, client);
     if (!product) {
         throw AppError.badRequest(`El producto con id ${item.product_id} no existe`);
@@ -93,8 +97,34 @@ async function buildLine(item, client) {
         throw AppError.unprocessable(`El producto "${product.name}" está inactivo y no puede solicitarse`);
     }
 
-    const term = item.installments_count;
     const costCents = moneyToCents(product.cost);
+
+    // CRÉDITO EXCEPCIONAL A PRECIO DE CONTADO (regla 13): precio público de
+    // contado, un solo pago. No hay mínimo distinto del propio precio.
+    if (creditType === 'EXCEPCIONAL_CONTADO') {
+        const cashPercent = BigInt(CASH_MARKUP_PERCENT) * 100n;
+        const unitCents = priceFromCost(costCents, cashPercent);
+        const lineCents = unitCents * BigInt(item.quantity);
+        return {
+            product_id: product.id,
+            quantity: item.quantity,
+            product_code_snapshot: product.code,
+            product_name_snapshot: product.name,
+            cost_snapshot: centsToMoney(costCents),
+            financing_type: 'CONTADO_EXCEPCIONAL',
+            installments_count: 1,
+            financing_percentage_snapshot: centsToMoney(cashPercent),
+            minimum_price_snapshot: centsToMoney(unitCents),
+            minimum_installment_snapshot: centsToMoney(lineCents),
+            configured_minimum_price_snapshot: null,
+            configured_minimum_installment_snapshot: null,
+            proposed_price: centsToMoney(unitCents),
+            proposed_installment: centsToMoney(lineCents),
+            lineTotalCents: lineCents,
+        };
+    }
+
+    const term = item.installments_count;
     let percentHundredths;
     let configuredMinimumUnitCents = null;
     let configuredInstallmentUnitCents = null;
@@ -218,6 +248,15 @@ export async function createCreditApplication(payload, user, { idempotencyKey = 
 
     try {
         const applicationId = await withTransaction(async (client) => {
+            // Serializa las solicitudes de un mismo cliente: la regla de
+            // reconfirmación depende de cuál fue su última operación.
+            await model.lockCustomer(client, payload.customer_id);
+
+            // Tras esperar el bloqueo, un envío repetido ya puede estar confirmado.
+            if (idempotencyKey && (await model.findByRequestKey(user.id, idempotencyKey, client))) {
+                throw new ReplaySignal();
+            }
+
             const userBranch = await model.getUserBranch(user.id, client);
             if (!userBranch) throw AppError.unauthorized('El usuario de la sesión ya no existe');
             if (!userBranch.branch_id) {
@@ -235,9 +274,20 @@ export async function createCreditApplication(payload, user, { idempotencyKey = 
                 throw AppError.unprocessable('El cliente está inactivo; actívalo antes de registrar una solicitud');
             }
 
+            // CLIENTE EXISTENTE (regla 9): con operaciones previas debe haber una
+            // reconfirmación de datos posterior a la última de ellas.
+            const confirmation = await model.customerConfirmationState(client, customer.id);
+            const isExisting = confirmation.last_operation_at !== null;
+            if (isExisting && (!confirmation.confirmed_at || confirmation.confirmed_at <= confirmation.last_operation_at)) {
+                throw AppError.unprocessable(
+                    'El cliente ya tiene operaciones registradas: antes de una nueva solicitud debe actualizar y reconfirmar sus datos',
+                    { reason: 'CUSTOMER_RECONFIRMATION_REQUIRED', customer_id: Number(customer.id) }
+                );
+            }
+
             const lines = [];
             for (const item of payload.items) {
-                lines.push(await buildLine(item, client));
+                lines.push(await buildLine(item, client, payload.credit_type));
             }
 
             const totalCents = lines.reduce((sum, line) => sum + line.lineTotalCents, 0n);
@@ -289,6 +339,8 @@ export async function createCreditApplication(payload, user, { idempotencyKey = 
                 proposed_down_payment: centsToMoney(downPaymentCents),
                 client_request_id: idempotencyKey,
                 request_fingerprint: idempotencyKey ? fingerprint : null,
+                credit_type: payload.credit_type,
+                customer_confirmation_id: isExisting ? confirmation.confirmation_id : null,
             };
 
             return model.createApplication(client, application, lines);
@@ -297,13 +349,47 @@ export async function createCreditApplication(payload, user, { idempotencyKey = 
         return { application: await model.findById(applicationId, creatorScope), replayed: false };
     } catch (error) {
         // Dos envíos simultáneos con la misma clave: el segundo choca con el
-        // índice único y devuelve la solicitud que registró el primero.
-        if (idempotencyKey && error?.code === '23505' && error?.constraint === UNIQUE_REQUEST_CONSTRAINT) {
+        // índice único (o lo detecta tras el bloqueo) y devuelve la del primero.
+        if (
+            idempotencyKey &&
+            (error instanceof ReplaySignal || (error?.code === '23505' && error?.constraint === UNIQUE_REQUEST_CONSTRAINT))
+        ) {
             const replay = await replayIfDuplicate(user.id, idempotencyKey, fingerprint, creatorScope);
             if (replay) return { application: replay, replayed: true };
         }
         throw error;
     }
+}
+
+/**
+ * Cálculo de condiciones y mínimos SIN guardar: el formulario muestra lo
+ * mismo que registrará el backend.
+ */
+export async function quoteCreditApplication(payload) {
+    return withTransaction(async (client) => {
+        const lines = [];
+        for (const item of payload.items) {
+            lines.push(await buildLine(item, client, payload.credit_type));
+        }
+        const totalCents = lines.reduce((sum, line) => sum + line.lineTotalCents, 0n);
+        const downPaymentCents = moneyToCents(payload.proposed_down_payment);
+        const terms = new Set(lines.map((l) => l.installments_count));
+        return {
+            credit_type: payload.credit_type,
+            items: lines.map(({ lineTotalCents, ...line }) => ({
+                ...line,
+                line_total: centsToMoney(lineTotalCents),
+                requires_price_exception: moneyToCents(line.proposed_price) < moneyToCents(line.minimum_price_snapshot),
+                requires_installment_exception:
+                    moneyToCents(line.proposed_installment) < moneyToCents(line.minimum_installment_snapshot),
+            })),
+            total: centsToMoney(totalCents),
+            proposed_down_payment: centsToMoney(downPaymentCents),
+            financed_amount: centsToMoney(totalCents - downPaymentCents),
+            down_payment_valid: downPaymentCents < totalCents,
+            installments_count: terms.size === 1 ? [...terms][0] : null,
+        };
+    });
 }
 
 // ---------------------------------------------------------------------

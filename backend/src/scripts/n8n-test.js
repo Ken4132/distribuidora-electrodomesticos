@@ -47,10 +47,23 @@ function check(name, condition, extra = '') {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Cada suite se presenta como un cliente distinto (su propia IP simulada), igual
+ * que lo serían dos sucursales. El limitador de login NO se desactiva ni se
+ * relaja: sigue contando igual que en producción, y el backend solo hace caso
+ * de esta cabecera cuando quien conecta es de confianza según TRUST_PROXY.
+ * Gracias a esto varias suites corren seguidas sin reiniciar el backend.
+ */
+const SUITE_IP = '198.18.10.6';
+
 async function api(method, p, body) {
     const res = await fetch(API + p, {
         method,
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Forwarded-For': SUITE_IP,
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         ...(body ? { body: JSON.stringify(body) } : {}),
     });
     return { status: res.status, body: await res.json().catch(() => null) };

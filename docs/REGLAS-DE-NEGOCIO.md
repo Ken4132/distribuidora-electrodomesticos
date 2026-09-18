@@ -269,10 +269,11 @@ El descuento de stock ocurre dentro de la misma transacción de la venta, con
 bloqueo de la fila del producto: dos vendedores simultáneos no pueden vender la
 misma última unidad.
 
-### V4 — Anulación de venta ⚠️ ASUMIDA
+### V4 — Anulación de venta ✅ DEFINIDA (2026-09-17, ver CV6 y §12 V4b)
 
-Solo el rol `admin` puede anular, solo si la venta **no tiene pagos**, y hay
-que escribir un motivo. Al anular se devuelve el stock. La venta no se borra.
+Solo el rol `admin` puede anular, solo si la venta **no tiene pagos aplicados**
+(si los tiene, primero se anulan los pagos), y hay que escribir un motivo. El stock
+vuelve a la sucursal de la que salió. Nada se borra.
 
 ### V5 — Movimientos de inventario ⚠️ ASUMIDA
 
@@ -760,6 +761,259 @@ Ninguno produce 500.
 
 ---
 
+## 10. Flujo de la solicitud (bloque 3.2)
+
+Decisiones definitivas del propietario (2026-09-16). Migración `009_credit_workflow.sql`.
+
+### CF1 — Estados y transiciones ✅ DEFINIDA
+
+`SOLICITADO → EN_VERIFICACION → EN_EVALUACION → APROBADO → VENTA_CONCRETADA → ACTIVO`,
+más `RECHAZADO` y `CANCELADO`. Un disparador de base de datos
+(`credit_applications_guard_status`) impide cualquier otra transición, aunque se
+intente fuera de la API. Cada cambio queda en `credit_application_status_history`.
+
+- La **primera verificación** pasa la solicitud a `EN_VERIFICACION`.
+- El Cobrador **concluye** la verificación (`FAVORABLE` o `DESFAVORABLE`) y la
+  solicitud pasa a `EN_EVALUACION`. `NECESITA_REVISION` la deja en verificación.
+- Puede haber varias verificaciones; todas se conservan (no se editan ni borran).
+
+### CF2 — Decisión ✅ DEFINIDA
+
+- Solo Administración o Gerencia (`credits.decide`), y solo con la verificación
+  concluida. Una sola decisión por solicitud; el rechazo es definitivo y exige razón.
+- Antes de decidir pueden **modificar** precio, plazo, tipo de plan y enganche.
+  Cada cambio guarda valor anterior, nuevo, usuario, fecha y comentario
+  (`credit_application_changes`). El mínimo se recalcula con el plan elegido.
+- Una línea bajo el mínimo (precio o cuota) solo se aprueba con **autorización
+  explícita por línea con motivo**, dentro de la misma decisión
+  (`credit_decision_exceptions`: mínimo, propuesto, diferencia, usuario, sucursal, motivo).
+
+### CF2b — Modificación después de la aprobación ✅ DEFINIDA (2026-09-17, ampliada en §12 CF6)
+
+Administración o Gerencia pueden modificar precio, plazo, tipo de plan y enganche
+de una solicitud **APROBADA** (hasta concretar la venta). La aprobación **no se
+pierde**, no vuelve a `EN_EVALUACION` y no requiere otra decisión: la modificación
+y la decisión son eventos independientes. Cada cambio conserva valor anterior,
+nuevo, usuario, fecha/hora y comentario, y queda en la bitácora.
+
+Si la modificación deja una línea bajo el mínimo sin una autorización que cubra sus
+condiciones nuevas, la misma operación exige autorizarla con motivo. Se guarda
+como excepción de origen `MODIFICACION` ligada a la decisión existente (migración
+`011_credit_post_approval_changes.sql`). Al concretar, toda línea bajo el mínimo
+debe tener una autorización vigente para sus condiciones actuales.
+
+### CF3 — Cancelación ✅ DEFINIDA
+
+- Antes de la decisión: el vendedor que la registró o Administración.
+- Aprobada (no vence): solo Administración. Siempre con motivo.
+
+### CF4 — Reconfirmación del cliente existente ✅ DEFINIDA
+
+Si el cliente ya tiene solicitudes o ventas, debe existir una reconfirmación de
+sus datos **posterior a su última operación** antes de registrar otra solicitud
+(`customer_confirmations`, con foto de los datos y campos cambiados). La API
+responde 422 con `reason: CUSTOMER_RECONFIRMATION_REQUIRED`.
+
+### CF5 — Crédito excepcional a precio de contado ✅ DEFINIDA
+
+Mismo flujo con `credit_type = EXCEPCIONAL_CONTADO`: precio público de contado,
+enganche Q0, una sola cuota. Administración o Gerencia deciden directamente
+(sin verificación obligatoria ⚠️ interpretación de "decisión directa").
+
+---
+
+## 11. Venta concretada desde la solicitud (bloque 3.3)
+
+Migración `010_credit_sales.sql`.
+
+### CV1 — Concreción en una sola operación ✅ DEFINIDA
+
+`APROBADO → VENTA_CONCRETADA → ACTIVO` en la misma transacción: crea la venta
+(`payment_mode = 'credito'`, ligada a `credit_application_id`), descuenta
+inventario, genera cuotas, registra el enganche real y activa el crédito.
+La pueden hacer el vendedor que registró la solicitud, Administración o Gerencia.
+
+### CV2 — Enganche real ✅ DEFINIDA
+
+- Puede ser menor al aprobado (nunca mayor) y siempre menor al total.
+- Si es mayor a Q0 se registra como **pago** a la fecha de la venta y se aplica
+  FIFO a las cuotas. No existe "cuota 0". Con Q0 no se registra pago.
+
+### CV3 — Cuotas consolidadas ✅ DEFINIDA
+
+Cada línea divide su total entre su plazo (centavos sobrantes en su última
+cuota) y se suman por mes. Ejemplo: 12 × Q650 + 6 × Q550 → meses 1–6 = Q1,200,
+meses 7–12 = Q650. La primera vence un mes después de la venta, mismo día;
+en meses cortos, el último día.
+
+### CV4 — Precios e inventario ✅ DEFINIDA
+
+- Precios congelados de la solicitud aprobada.
+- Se descuenta de la sucursal de la solicitud; si no alcanza se bloquea (422 con
+  el detalle por producto). Nunca se toma de otra sucursal.
+
+### CV5 — Crédito excepcional ✅ DEFINIDA
+
+Una cuota por el total, vence el mismo día del mes siguiente. La vista
+`v_exceptional_credit_control` marca `requires_regularization` cuando tiene saldo
+y más de 60 días desde la activación. ⏳ El proceso de regularización queda pendiente.
+
+### CV6 — Anulación de venta ✅ DEFINIDA (2026-09-17)
+
+Aplica a toda venta, incluidas las concretadas desde una solicitud.
+
+- **Sin pagos aplicados:** se anula y el stock vuelve a la sucursal de la que salió
+  cada producto en esa venta (movimiento de entrada `anulacion_venta`).
+- **Con pagos:** primero se anulan los pagos (Administración); después la venta.
+- Nada se borra: la venta queda `anulada`, los pagos `anulado` con motivo y sus
+  aplicaciones a cuotas se conservan (las vistas solo suman pagos aplicados).
+  Cuotas y líneas se conservan. Todo queda en la bitácora y en `sale.cancelled`.
+
+### CV7 — Puntos abiertos ✅ CERRADOS EN §12 (2026-09-17)
+
+- `POST /sales` todavía permite `credito_4` / `credito_8` directos (módulo anterior).
+- Al anular la venta de una solicitud, la solicitud conserva su estado `ACTIVO`
+  (la pantalla indica que la venta fue anulada); no hay un estado definido para ese caso.
+- La fecha de concreción es la fecha del día.
+
+---
+
+---
+
+## 12. Corrección final del bloque 3.2 / 3.3 ✅ DEFINIDA (2026-09-17)
+
+Migración `012_credit_final_review.sql`. Sustituye lo que en CF2b y CV7 quedaba
+abierto.
+
+### CF6 — Modificación después de la aprobación y última revisión ✅ DEFINIDA
+
+Una solicitud APROBADA se puede modificar hasta que se concrete la venta. **No
+existe el estado `APROBADO_CON_CAMBIOS`**: la solicitud sigue en `APROBADO` y
+conserva su única decisión. Lo que cambia es una bandera,
+`credit_applications.requires_final_review`.
+
+| Quién modifica | Permiso | Efecto |
+| --- | --- | --- |
+| Administración o Gerencia | `credits.decide` | Sigue APROBADO. La modificación **se considera aprobada de inmediato**: no hay segunda decisión, ni verificación nueva, ni revisión pendiente. |
+| El vendedor que la registró | `credits.modify.own` | Sigue APROBADO, pero `requires_final_review = true`: **la aprobación anterior ya no basta**. No vuelve a verificación. Cobranza no participa. |
+
+Se puede modificar **precio, plazo, tipo de plan, enganche, productos y
+cantidades**. Cada cambio guarda valor anterior, nuevo, usuario, fecha/hora y
+motivo en `credit_application_changes`, y el motivo (`comment`) es **obligatorio**
+cuando la solicitud ya está aprobada.
+
+**Qué impide concretar.** Mientras `requires_final_review = true`:
+
+- `POST /credit-applications/:id/concretize` responde **409** con
+  `reason: FINAL_REVIEW_REQUIRED`, para cualquier usuario;
+- el trigger `trg_sales_credit_origin` (012) impide el `INSERT` en `sales`
+  aunque se intente por SQL directo.
+
+**La última revisión** (`POST /credit-applications/:id/final-review`, permiso
+`credits.review.final`, solo Administración y Gerencia) **no es una segunda
+decisión**: no crea otra `credit_decision`.
+
+| Resultado | Efecto |
+| --- | --- |
+| `CONFIRMADO` | `requires_final_review = false`: ya se puede concretar. Toda línea bajo el mínimo debe autorizarse aquí, con motivo. |
+| `RECHAZADO` | La bandera sigue encendida y la venta sigue bloqueada. Exige razón. Administración o Gerencia pueden entonces corregir ellos mismos las condiciones (su modificación confirma) o cancelar la solicitud. |
+
+Cada revisión queda en `credit_final_reviews` (solo inserción) con usuario,
+fecha/hora, resultado, comentario y quién dejó la solicitud pendiente. Si
+Administración o Gerencia modifican una solicitud que estaba pendiente de
+revisión, esa intervención la resuelve y se registra como `CONFIRMADO`: la
+bandera nunca se apaga en silencio.
+
+### CF7 — Productos y cantidades de la solicitud ✅ DEFINIDA
+
+- Se pueden **agregar** líneas nuevas y **cambiar la cantidad** de las existentes.
+- Una línea **nunca se borra**: se retira con `is_void = true` y conserva
+  `voided_at` y `voided_by`. La fila se queda en el expediente, visible, y deja
+  de contar en total, cuota, mínimos y excepciones. El `DELETE` físico está
+  prohibido por trigger, y una línea retirada no se reactiva ni se edita.
+- Retirar exige **motivo** (mínimo 5 caracteres) y la solicitud debe conservar
+  al menos una línea vigente.
+- Al modificar se recalculan con las reglas y el costo vigentes: total, precio
+  mínimo, cuota, mínimos configurados y snapshots. El enganche se revalida
+  contra el total nuevo.
+- Una línea que queda bajo el mínimo exige **autorización explícita con motivo**,
+  ligada a la decisión existente con `source = 'MODIFICACION'`. Al concretar se
+  vuelve a comprobar que las condiciones actuales coincidan exactamente con las
+  autorizadas (mínimo, propuesto y cuotas): si no, la venta se bloquea.
+
+### PE4 — Permisos adicionales por usuario ✅ DEFINIDA
+
+El rol sigue siendo la base. `user_permissions` concede (`GRANT`) o retira
+(`REVOKE`) un permiso a **un usuario concreto**, sin crear roles nuevos:
+
+```text
+permiso efectivo = permisos del rol + GRANT del usuario - REVOKE del usuario
+```
+
+Caso de uso: un **Cobrador con capacidades de Vendedor**. Un cobrador normal no
+vende ni concreta; con `sales.create` concedido registra ventas, y con
+`credits.concretize.own` concreta **sus propias** solicitudes. No se crea el rol
+`cobrador_vendedor`.
+
+- Lo administra solo Administración (`users.permissions`).
+- El cambio surte efecto **de inmediato**, sin reiniciar ni volver a entrar.
+- Cada concesión, revocación o retiro queda en `user_permission_changes` (solo
+  inserción) con quién, qué permiso, a qué usuario, cuándo y por qué, además de
+  la bitácora.
+
+### V4b / CV6b — Anulación de venta ✅ DEFINIDA (sustituye a V4)
+
+```text
+VENTA ACTIVA → motivo obligatorio → solo Administración o Gerencia
+             → reversión económica → devolución de stock → ANULADA
+```
+
+- **Quién:** Administración o Gerencia (`sales.cancel`). Gerencia recibe además
+  `sales.view` para poder supervisar, revisar, concretar, anular y auditar.
+  La anulación de **pagos** sigue siendo exclusiva de Administración.
+- **Motivo obligatorio** (mínimo 5 caracteres).
+- **Sin pagos aplicados:** se anula y el stock vuelve a la sucursal de la que
+  salió cada producto en esa venta (entrada `anulacion_venta`), nunca a otra.
+- **Con pagos:** responde **409** con `reason: PAYMENTS_MUST_BE_VOIDED_FIRST`.
+  Primero se anulan los pagos por su proceso formal y auditado; después la venta.
+  El **enganche** de un crédito es un pago más: se revierte igual, el saldo
+  vuelve a subir y el pago queda `anulado` con su motivo.
+- **Nada se borra:** venta, cuotas, líneas, pagos y aplicaciones a cuotas se
+  conservan. Las vistas solo suman pagos aplicados.
+- **Concurrencia:** la venta se bloquea con `FOR UPDATE` antes de comprobar
+  nada, y registrar un pago bloquea esa misma fila. Un pago no puede colarse
+  entre la comprobación y la anulación: o entra antes (y la anulación falla con
+  409) o espera y encuentra la venta anulada (422).
+- **Registro** en `sale_cancellations` (solo inserción): usuario, fecha/hora,
+  motivo, venta, solicitud relacionada, total, pagos revertidos y su importe,
+  enganche revertido y stock restituido por producto y sucursal.
+
+### CV8 — La solicitud después de anular su venta ✅ DEFINIDA
+
+La solicitud pasa al estado **`VENTA_ANULADA`**, que es **terminal**:
+
+- sale de la cartera activa (`v_customer_accounts` y cobranza ya filtraban por
+  venta activa) y del control de regularización del crédito excepcional
+  (`v_exceptional_credit_control` excluye las ventas anuladas);
+- conserva **todo** su historial: decisión, verificaciones, excepciones,
+  modificaciones, revisiones finales y estados;
+- **no se reutiliza** para crear otra venta: concretar responde 409 y el índice
+  único `ux_credit_applications_sale` lo impide;
+- si el cliente vuelve a solicitar crédito se registra una **solicitud nueva**,
+  que puede consultar el historial de la anterior en la evaluación.
+
+### V5b — Ventas nuevas a crédito ✅ DEFINIDA (cierra CV7)
+
+Toda venta a crédito **nueva** nace de una solicitud APROBADA y se registra al
+concretarla, con `payment_mode = 'credito'` y `credit_application_id`.
+
+`POST /sales` solo admite **`contado`**. `credito_4` y `credito_8` se conservan
+**únicamente para las ventas históricas**: se leen, se cobran, se anulan y se
+consultan igual que siempre, y sus reglas de precio (+50 % / +70 %) no se
+reinterpretan; lo único que ya no se puede es registrar una venta nueva con
+ellas. La protección está en tres capas: validador, servicio y base de datos
+(`trg_sales_credit_origin`). El formulario de venta tampoco las ofrece.
+
 ## Lista de verificación
 
 Para revisar en la validación local. Marca lo que coincide con la operación
@@ -784,7 +1038,7 @@ real y señala lo que hay que cambiar.
 | R5 | El precio **ya incluye** todo (sin línea de IVA) | |
 | V2 | Una venta tiene **una sola** modalidad de pago | |
 | V3 | **No** se puede vender sin stock | |
-| V4 | Solo se anula una venta **sin pagos**, y solo el admin | |
+| V4b | Anulan Administración y Gerencia; con pagos, primero se anulan los pagos | |
 | CL2 | El teléfono debe ser **guatemalteco de 8 dígitos** | |
 | CL4 | **No** se puede desactivar un cliente con saldo | |
 | U2 | La sesión dura **8 horas** | |
@@ -799,3 +1053,6 @@ real y señala lo que hay que cambiar.
 | S2 | La migración **no** asigna sucursal a los usuarios existentes | |
 | I2 | Trasladar stock fuera de la predeterminada lo deja **fuera** de las ventas | |
 | PE1 | Solo el **administrador** ve sucursales e inventario por sucursal | |
+| CF1 | `NECESITA_REVISION` deja la solicitud en verificación | |
+| CF5 | El crédito excepcional se decide **sin** verificación previa | |
+| CV8 | Al anular su venta, la solicitud queda en `VENTA_ANULADA` y no se reutiliza | |

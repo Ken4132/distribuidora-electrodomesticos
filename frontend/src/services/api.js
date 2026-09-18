@@ -24,16 +24,24 @@ export class ApiError extends Error {
     /** Mensaje listo para mostrar, incluyendo los errores campo por campo. */
     get fullMessage() {
         if (!this.details?.length) return this.message;
-        return `${this.message}: ${this.details.map((d) => `${d.campo} — ${d.mensaje}`).join('; ')}`;
+        return `${this.message}: ${this.details.map(describeDetail).join('; ')}`;
     }
     /** { campo: mensaje } para pintar el error debajo de cada input. */
     get fieldErrors() {
         if (!Array.isArray(this.details)) return {};
-        return Object.fromEntries(this.details.map((d) => [d.campo, d.mensaje]));
+        return Object.fromEntries(this.details.filter((d) => d?.campo).map((d) => [d.campo, d.mensaje]));
     }
 }
 
-async function request(method, path, body) {
+/** Detalle de error: campo inválido o faltante de existencia por producto. */
+function describeDetail(d) {
+    if (d?.campo) return `${d.campo} — ${d.mensaje}`;
+    if (d?.producto && d.disponible != null) return `${d.producto}: disponible ${d.disponible}, requerido ${d.requerido}`;
+    if (d?.producto) return d.producto;
+    return typeof d === 'string' ? d : JSON.stringify(d);
+}
+
+async function request(method, path, body, extraHeaders = {}) {
     let response;
     try {
         response = await fetch(BASE + path, {
@@ -41,6 +49,7 @@ async function request(method, path, body) {
             headers: {
                 'Content-Type': 'application/json',
                 ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+                ...extraHeaders,
             },
             ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         });
@@ -78,9 +87,10 @@ const qs = (params = {}) => {
 
 export const api = {
     get: (path, params) => request('GET', path + qs(params)),
-    post: (path, body) => request('POST', path, body),
+    post: (path, body, headers) => request('POST', path, body, headers),
     put: (path, body) => request('PUT', path, body),
     patch: (path, body) => request('PATCH', path, body),
+    del: (path, body) => request('DELETE', path, body),
 };
 
 // --------------------------------------------------------------- Endpoints
@@ -100,6 +110,11 @@ export const usersApi = {
     setActive: (id, isActive) => api.patch(`/users/${id}/status`, { is_active: isActive }),
     resetPassword: (id, password) => api.post(`/users/${id}/password`, { password }),
     assignBranch: (id, branchId) => api.patch(`/users/${id}/branch`, { branch_id: branchId }),
+    // Permisos adicionales por usuario (012)
+    permissions: (id) => api.get(`/users/${id}/permissions`),
+    permissionCatalog: () => api.get('/users/catalog/permissions'),
+    setPermission: (id, data) => api.put(`/users/${id}/permissions`, data),
+    clearPermission: (id, data) => api.del(`/users/${id}/permissions`, data),
 };
 
 export const branchesApi = {
@@ -153,6 +168,27 @@ export const customersApi = {
     create: (data) => api.post('/customers', data),
     update: (id, data) => api.put(`/customers/${id}`, data),
     setActive: (id, isActive) => api.patch(`/customers/${id}/status`, { is_active: isActive }),
+    confirmations: (id) => api.get(`/customers/${id}/confirmations`),
+    confirm: (id, data) => api.post(`/customers/${id}/confirmations`, data),
+};
+
+/** Solicitudes de crédito (bloques 3.1–3.3). */
+export const creditsApi = {
+    list: (params) => api.get('/credit-applications', params),
+    get: (id) => api.get(`/credit-applications/${id}`),
+    quote: (data) => api.post('/credit-applications/quote', data),
+    /** `requestKey` evita registrar dos veces el mismo envío (doble clic, reintento). */
+    create: (data, requestKey) =>
+        api.post('/credit-applications', data, requestKey ? { 'Idempotency-Key': requestKey } : undefined),
+    verify: (id, data) => api.post(`/credit-applications/${id}/verifications`, data),
+    conclude: (id) => api.post(`/credit-applications/${id}/verifications/conclude`, {}),
+    modify: (id, data) => api.patch(`/credit-applications/${id}/conditions`, data),
+    evaluation: (id) => api.get(`/credit-applications/${id}/evaluation`),
+    decide: (id, data) => api.post(`/credit-applications/${id}/decision`, data),
+    cancel: (id, reason) => api.post(`/credit-applications/${id}/cancel`, { reason }),
+    concretize: (id, data) => api.post(`/credit-applications/${id}/concretize`, data),
+    /** Última revisión de Administración/Gerencia tras un cambio del vendedor (012). */
+    finalReview: (id, data) => api.post(`/credit-applications/${id}/final-review`, data),
 };
 
 export const productsApi = {

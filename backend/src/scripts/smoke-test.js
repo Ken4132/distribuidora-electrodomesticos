@@ -29,11 +29,21 @@ function check(name, condition, extra = '') {
     }
 }
 
+/**
+ * Cada suite se presenta como un cliente distinto (su propia IP simulada), igual
+ * que lo serían dos sucursales. El limitador de login NO se desactiva ni se
+ * relaja: sigue contando igual que en producción, y el backend solo hace caso
+ * de esta cabecera cuando quien conecta es de confianza según TRUST_PROXY.
+ * Gracias a esto varias suites corren seguidas sin reiniciar el backend.
+ */
+const SUITE_IP = '198.18.10.1';
+
 async function api(method, path, body, useToken = true) {
     const res = await fetch(BASE + path, {
         method,
         headers: {
             'Content-Type': 'application/json',
+            'X-Forwarded-For': SUITE_IP,
             ...(useToken && token ? { Authorization: `Bearer ${token}` } : {}),
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
@@ -49,6 +59,85 @@ async function api(method, path, body, useToken = true) {
 
 const q = (n) => Number(n).toFixed(2);
 const stamp = Date.now().toString().slice(-7);
+
+/**
+ * VENTA HISTÓRICA A CRÉDITO (credito_4 / credito_8).
+ *
+ * Desde el bloque 3.3 `POST /sales` ya no registra ventas nuevas con estas
+ * modalidades: un crédito nuevo nace de una solicitud APROBADA. Las ventas
+ * que YA existen siguen siendo válidas, se leen, se cobran, se anulan y se
+ * consultan igual que siempre, y eso es justo lo que comprueban las secciones
+ * siguientes. Para tener una de esas ventas, la prueba la inserta como
+ * FIXTURE con los mismos modelos y utilidades que usaba el servicio
+ * histórico: no duplica la aritmética ni inventa datos.
+ */
+async function ventaHistoricaACredito({ customerId, productId, quantity = 1, mode = 'credito_4', saleDate = null, notes = null }) {
+    const { pool } = await import('../config/db.js');
+    const Sale = await import('../models/sale.model.js');
+    const Product = await import('../models/product.model.js');
+    const { money, sumMoney, splitInstallments, toCents } = await import('../utils/money.js');
+    const { buildDueDates, today } = await import('../utils/dates.js');
+    const { installmentsFor, priceFieldFor } = await import('../utils/pricing.js');
+
+    const priceField = priceFieldFor(mode);
+    const count = installmentsFor(mode);
+    const date = saleDate ?? today();
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const { rows: products } = await client.query(
+            `SELECT id, code, name, cost, ${priceField} AS unit_price FROM products WHERE id = $1 FOR UPDATE`,
+            [productId]
+        );
+        const product = products[0];
+        const line = {
+            product_id: Number(product.id),
+            product_code: product.code,
+            product_name: product.name,
+            quantity,
+            unit_cost: product.cost,
+            unit_price: product.unit_price,
+            line_total: money((toCents(product.unit_price) * quantity) / 100),
+        };
+        const total = sumMoney([line.line_total]);
+        const sale = await Sale.createSale(client, {
+            customer_id: customerId,
+            sale_date: date,
+            payment_mode: mode,
+            installments_count: count,
+            subtotal: money(total),
+            total: money(total),
+            notes: notes ?? 'Venta histórica (fixture de la prueba)',
+            created_by: null,
+        });
+        await Sale.createItem(client, sale.id, line);
+        await Product.adjustStock(client, {
+            productId: line.product_id,
+            delta: -quantity,
+            reason: 'venta',
+            saleId: sale.id,
+            userId: null,
+        });
+        const amounts = splitInstallments(total, count);
+        const dueDates = buildDueDates(date, count);
+        for (let i = 0; i < count; i += 1) {
+            await Sale.createInstallment(client, sale.id, {
+                number: i + 1,
+                dueDate: dueDates[i],
+                amount: money(amounts[i]),
+            });
+        }
+        await client.query('COMMIT');
+        // Se devuelve con la MISMA forma que `POST /sales`, leyéndola por la API.
+        return api('GET', `/sales/${sale.id}`);
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
+}
 
 async function main() {
     console.log(`\n=== Prueba de flujo completo contra ${BASE} ===\n`);
@@ -166,13 +255,40 @@ async function main() {
     });
     check('Modalidad de pago inexistente es rechazada (422)', badMode.status === 422, `recibido ${badMode.status}`);
 
-    const sale = await api('POST', '/sales', {
+    // REGLA VIGENTE (3.3): una venta a crédito NUEVA no se registra aquí.
+    const nuevaACredito = await api('POST', '/sales', {
         customer_id: customerId,
         payment_mode: 'credito_4',
         items: [{ product_id: productId, quantity: QTY }],
+    });
+    check('Una venta NUEVA con credito_4 se rechaza (422): debe nacer de una solicitud aprobada',
+        nuevaACredito.status === 422, `recibido ${nuevaACredito.status}`);
+    const nuevaACredito8 = await api('POST', '/sales', {
+        customer_id: customerId,
+        payment_mode: 'credito_8',
+        items: [{ product_id: productId, quantity: 1 }],
+    });
+    check('Una venta NUEVA con credito_8 también se rechaza (422)', nuevaACredito8.status === 422,
+        `recibido ${nuevaACredito8.status}`);
+    const nuevaCredito = await api('POST', '/sales', {
+        customer_id: customerId,
+        payment_mode: 'credito',
+        items: [{ product_id: productId, quantity: 1 }],
+    });
+    check('Una venta NUEVA con la modalidad `credito` tampoco entra por aquí (422)',
+        nuevaCredito.status === 422, `recibido ${nuevaCredito.status}`);
+
+    // Las ventas a crédito que YA existen siguen funcionando igual: la prueba
+    // inserta una como fixture y verifica que se lee, cobra y anula como antes.
+    const sale = await ventaHistoricaACredito({
+        customerId,
+        productId,
+        quantity: QTY,
+        mode: 'credito_4',
         notes: 'Venta generada por la prueba automatizada',
     });
-    check('Venta registrada (201)', sale.status === 201, JSON.stringify(sale.body?.error ?? ''));
+    check('La venta histórica a crédito se lee correctamente (200)', sale.status === 200,
+        JSON.stringify(sale.body?.error ?? ''));
     const saleId = sale.body?.data?.id;
     const s = sale.body?.data ?? {};
 
@@ -318,9 +434,8 @@ async function main() {
     console.log('\n[9] Reglas de vencimiento y comportamiento de pagos');
 
     // Venta el 31 de enero: los meses cortos no deben desplazar el calendario
-    const janSale = await api('POST', '/sales', {
-        customer_id: customerId, payment_mode: 'credito_4', sale_date: '2026-01-31',
-        items: [{ product_id: ruleProductId, quantity: 1 }],
+    const janSale = await ventaHistoricaACredito({
+        customerId, productId: ruleProductId, quantity: 1, mode: 'credito_4', saleDate: '2026-01-31',
     });
     const janDues = janSale.body?.data?.installments?.map((i) => i.due_date) ?? [];
     check('Venta del 31-ene: vencimientos 28/02, 31/03, 30/04, 31/05',
@@ -355,9 +470,8 @@ async function main() {
         ci[2]?.status === 'vencida', `= ${ci[2]?.status}`);
 
     // El mismo caso pero con vencimientos futuros: ahí sí debe decir 'parcial'
-    const futureSale = await api('POST', '/sales', {
-        customer_id: customerId, payment_mode: 'credito_4',
-        items: [{ product_id: ruleProductId, quantity: 1 }],
+    const futureSale = await ventaHistoricaACredito({
+        customerId, productId: ruleProductId, quantity: 1, mode: 'credito_4',
     });
     const futureId = futureSale.body?.data?.id;
     const futureCuota = Number(futureSale.body?.data?.installments?.[0]?.amount);
@@ -405,7 +519,10 @@ async function main() {
     );
     const types = Object.fromEntries(rows.map((r) => [r.event_type, r.n]));
     check('Se registró customer.created', (types['customer.created'] ?? 0) >= 1, JSON.stringify(types));
-    check('Se registró sale.created', (types['sale.created'] ?? 0) >= 2);
+    // Las ventas a crédito de esta prueba son fixtures históricos (no pasan
+    // por el servicio, así que no emiten evento). Los sale.created vienen de
+    // las ventas de contado, que sí se registran por la API.
+    check('Se registró sale.created', (types['sale.created'] ?? 0) >= 2, JSON.stringify(types));
     check('Se registró payment.created', (types['payment.created'] ?? 0) >= 3);
     check('Se registró sale.paid al saldar la venta', (types['sale.paid'] ?? 0) >= 1);
 

@@ -1,16 +1,19 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
 
 import routes from './routes/index.js';
 import { config } from './config/env.js';
+import { apiLimiter } from './middleware/rateLimit.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 export function createApp() {
     const app = express();
 
-    app.set('trust proxy', 1);
+    // De esto depende qué IP ve el limitador de login. NO se fija a `true`:
+    // eso confiaría en cualquier X-Forwarded-For y la IP sería falsificable.
+    // El valor sale de TRUST_PROXY; ver config/env.js -> parseTrustProxy.
+    app.set('trust proxy', config.trustProxy);
     app.disable('x-powered-by');
 
     app.use(helmet());
@@ -31,14 +34,9 @@ export function createApp() {
     app.use(express.json({ limit: '256kb' }));
     app.use(express.urlencoded({ extended: false, limit: '256kb' }));
 
-    app.use(
-        rateLimit({
-            windowMs: 60 * 1000,
-            limit: 300,
-            standardHeaders: true,
-            legacyHeaders: false,
-        })
-    );
+    // Freno general de volumen. El login tiene además sus dos frenos propios
+    // (por IP + usuario y por IP) en routes/auth.routes.js.
+    app.use(apiLimiter);
 
     if (!config.isProd) {
         app.use((req, _res, next) => {

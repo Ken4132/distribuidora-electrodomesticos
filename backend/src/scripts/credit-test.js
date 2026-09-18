@@ -44,11 +44,37 @@ function check(name, condition, extra = '') {
     }
 }
 
-async function api(method, path, { body, token, headers = {} } = {}) {
+/**
+ * Regla 9 (3.2): un cliente con operaciones previas debe reconfirmar sus datos
+ * antes de cada nueva solicitud. Estas pruebas de 3.1 crean muchas solicitudes
+ * del mismo cliente, así que se reconfirma automáticamente antes de cada
+ * POST /credit-applications (con la sesión de Administración). La regla en sí
+ * se prueba sin este atajo en credit-workflow-test.js.
+ */
+let confirmToken = '';
+
+/**
+ * Cada suite se presenta como un cliente distinto (su propia IP simulada), igual
+ * que lo serían dos sucursales. El limitador de login NO se desactiva ni se
+ * relaja: sigue contando igual que en producción, y el backend solo hace caso
+ * de esta cabecera cuando quien conecta es de confianza según TRUST_PROXY.
+ * Gracias a esto varias suites corren seguidas sin reiniciar el backend.
+ */
+const SUITE_IP = '198.18.10.4';
+
+async function api(method, path, { body, token, headers = {}, skipConfirm = false } = {}) {
+    if (confirmToken && !skipConfirm && method === 'POST' && path === '/credit-applications' && body?.customer_id) {
+        await fetch(`${BASE}/customers/${body.customer_id}/confirmations`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${confirmToken}` },
+            body: '{}',
+        });
+    }
     const res = await fetch(BASE + path, {
         method,
         headers: {
             'Content-Type': 'application/json',
+            'X-Forwarded-For': SUITE_IP,
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
             ...headers,
         },
@@ -116,6 +142,7 @@ async function main() {
     console.log('\n[1] Preparación: sucursales, usuarios, clientes, productos y planes');
 
     const admin = await login(ADMIN_USER, ADMIN_PASS);
+    confirmToken = admin;
     check('El administrador inicia sesión', Boolean(admin));
     if (!admin) throw new Error('Sin sesión de administrador no se puede continuar. ¿Ejecutaste `npm run seed`?');
     const gerencia = await login('gerencia', TEST_PASS);
@@ -638,8 +665,12 @@ async function main() {
     const cB = await listFor(cobradorB);
     check('Cobrador B solo ve la solicitud de la sucursal B', ids(cB).length === 1 && ids(cB)[0] === app3.id, ids(cB).join(','));
 
-    // Simula el avance de estado que hará el bloque 3.2 (verificación).
-    await pool.query(`UPDATE credit_applications SET status = 'EN_EVALUACION' WHERE id = $1`, [app4.id]);
+    // Avance real del flujo (3.2): el cobrador de la sucursal verifica y envía a evaluación.
+    const verified = await api('POST', `/credit-applications/${app4.id}/verifications`, {
+        token: cobradorA,
+        body: { result: 'FAVORABLE', recommendation: 'FAVORABLE', address_matches: 'SI', housing_verified: 'SI', residence_time_matches: 'SI', conclude: true },
+    });
+    check('El cobrador de la sucursal verifica y envía a evaluación (flujo 3.2)', verified.status === 201 && verified.body?.data?.status === 'EN_EVALUACION', show(verified));
     const cAAfter = await listFor(cobradorA);
     check('Una solicitud fuera de verificación (EN_EVALUACION) deja de estar en el alcance del cobrador',
         !ids(cAAfter).includes(app4.id) && ids(cAAfter).includes(app1.id), ids(cAAfter).join(','));

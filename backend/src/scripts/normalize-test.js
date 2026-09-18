@@ -217,11 +217,23 @@ async function run() {
         check('La categoría se guarda en su forma canónica', cat[0].name === 'LINEA BLANCA 2A', cat[0].name);
         await client.query('ROLLBACK');
 
-        // Histórico de costos inmutable (RN-0006)
-        const immutableUpdate = await failsWith(client, 'UPDATE product_cost_history SET cost = 1 WHERE id = 1');
-        check('El histórico de costos no se puede modificar', immutableUpdate === '23001', immutableUpdate);
-        const immutableDelete = await failsWith(client, 'DELETE FROM product_cost_history WHERE id = 1');
-        check('El histórico de costos no se puede borrar', immutableDelete === '23001', immutableDelete);
+        // Histórico de costos inmutable (RN-0006).
+        // La comprobación necesita una fila real: si la tabla está vacía (base
+        // recién migrada), un UPDATE que no toca ninguna fila no dispara el
+        // trigger y la prueba no comprobaría nada. Se garantiza una fila y se
+        // usa SU identificador, no uno fijo.
+        await client.query('BEGIN');
+        const { rows: costRow } = await client.query(
+            `INSERT INTO product_cost_history (product_id, cost, previous_cost, reason)
+             SELECT id, cost, cost, 'correccion' FROM products ORDER BY id LIMIT 1
+             RETURNING id`
+        );
+        await client.query('COMMIT');
+        const costId = costRow[0]?.id;
+        const immutableUpdate = await failsWith(client, `UPDATE product_cost_history SET cost = 1 WHERE id = ${costId}`);
+        check('El histórico de costos no se puede modificar', immutableUpdate === '23001', `${immutableUpdate} (fila ${costId})`);
+        const immutableDelete = await failsWith(client, `DELETE FROM product_cost_history WHERE id = ${costId}`);
+        check('El histórico de costos no se puede borrar', immutableDelete === '23001', `${immutableDelete} (fila ${costId})`);
     } finally {
         client.release();
     }

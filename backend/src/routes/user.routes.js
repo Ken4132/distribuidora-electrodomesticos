@@ -12,6 +12,8 @@ import {
     changePasswordSchema,
     changeOwnPasswordSchema,
     assignBranchSchema,
+    setUserPermissionSchema,
+    clearUserPermissionSchema,
 } from '../validators/user.schema.js';
 
 const router = Router();
@@ -112,6 +114,60 @@ router.post(
         summary: (req, payload) => `Restableció la contraseña de "${payload?.data?.username}"`,
     }),
     ctrl.resetPassword
+);
+
+
+// ---------------------------------------------------------------------
+// PERMISOS ADICIONALES POR USUARIO (012)
+//
+// Permiso propio (`users.permissions`) y no `users.manage`: conceder a un
+// Cobrador la capacidad de vender no es lo mismo que crear cuentas o cambiar
+// roles. En la migración 012 solo lo tiene Administración.
+// ---------------------------------------------------------------------
+
+router.get('/catalog/permissions', requirePermission('users.permissions', { module: MODULE }), ctrl.permissionCatalog);
+
+router.get(
+    '/:id/permissions',
+    requirePermission('users.permissions', { module: MODULE }),
+    validate({ params: idParam }),
+    ctrl.permissions
+);
+
+router.put(
+    '/:id/permissions',
+    requirePermission('users.permissions', { module: MODULE }),
+    validate({ params: idParam, body: setUserPermissionSchema }),
+    audit('user.permission.set', {
+        module: MODULE,
+        entity: 'user',
+        entityId: (req) => Number(req.params.id),
+        summary: (req, payload) =>
+            `${req.body?.effect === 'GRANT' ? 'Concedió' : 'Retiró'} el permiso "${req.body?.permission_code}" ` +
+            `${req.body?.effect === 'GRANT' ? 'a' : 'de'} "${payload?.data?.user?.username}". Motivo: ${req.body?.reason}`,
+        details: (req) => ({
+            permiso: req.body?.permission_code,
+            efecto: req.body?.effect,
+            motivo: req.body?.reason,
+        }),
+    }),
+    ctrl.setPermission
+);
+
+router.delete(
+    '/:id/permissions',
+    requirePermission('users.permissions', { module: MODULE }),
+    validate({ params: idParam, body: clearUserPermissionSchema }),
+    audit('user.permission.clear', {
+        module: MODULE,
+        entity: 'user',
+        entityId: (req) => Number(req.params.id),
+        summary: (req, payload) =>
+            `Quitó la excepción del permiso "${req.body?.permission_code}" de "${payload?.data?.user?.username}": ` +
+            `vuelve a los permisos de su rol. Motivo: ${req.body?.reason}`,
+        details: (req) => ({ permiso: req.body?.permission_code, motivo: req.body?.reason }),
+    }),
+    ctrl.clearPermission
 );
 
 export default router;

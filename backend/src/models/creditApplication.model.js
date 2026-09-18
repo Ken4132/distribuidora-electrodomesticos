@@ -1,4 +1,5 @@
 import { query } from '../config/db.js';
+import { workflowDetails } from './creditWorkflow.model.js';
 
 /**
  * Acceso a datos de solicitudes de crédito.
@@ -115,6 +116,8 @@ export async function createApplication(client, application, items) {
         'proposed_down_payment',
         'client_request_id',
         'request_fingerprint',
+        'credit_type',
+        'customer_confirmation_id',
     ];
     // Los nombres de columna son constantes de este archivo, no entrada del
     // usuario; los valores viajan siempre como parámetros.
@@ -158,7 +161,54 @@ export async function createApplication(client, application, items) {
         );
     }
 
+    await insertStatusHistory(client, {
+        applicationId,
+        fromStatus: null,
+        toStatus: 'SOLICITADO',
+        userId: application.created_by,
+        reason: null,
+    });
+
     return applicationId;
+}
+
+/** Deja constancia de un cambio de estado (tabla de solo inserción). */
+export async function insertStatusHistory(client, { applicationId, fromStatus, toStatus, userId, reason = null }) {
+    await client.query(
+        `INSERT INTO credit_application_status_history
+             (credit_application_id, from_status, to_status, changed_by, reason)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [applicationId, fromStatus, toStatus, userId, reason]
+    );
+}
+
+/**
+ * ¿El cliente ya tiene operaciones (solicitudes o ventas)? Devuelve la fecha
+ * de la última y la última reconfirmación de datos.
+ */
+export async function customerConfirmationState(client, customerId) {
+    const { rows } = await client.query(
+        `SELECT GREATEST(
+                    (SELECT MAX(created_at) FROM credit_applications WHERE customer_id = $1),
+                    (SELECT MAX(created_at) FROM sales WHERE customer_id = $1)
+                ) AS last_operation_at,
+                c.id AS confirmation_id,
+                c.confirmed_at
+           FROM (SELECT 1) x
+           LEFT JOIN LATERAL (
+                SELECT id, confirmed_at FROM customer_confirmations
+                 WHERE customer_id = $1
+              ORDER BY confirmed_at DESC, id DESC
+                 LIMIT 1
+           ) c ON TRUE`,
+        [customerId]
+    );
+    return rows[0];
+}
+
+/** Bloquea al cliente: serializa las solicitudes nuevas de un mismo cliente. */
+export async function lockCustomer(client, customerId) {
+    await client.query('SELECT id FROM customers WHERE id = $1 FOR UPDATE', [customerId]);
 }
 
 /**
@@ -200,6 +250,7 @@ export async function list(filters, scope, timezone) {
     if (filters.customer_id) add('v.customer_id = ?', filters.customer_id);
     if (filters.created_by) add('v.created_by = ?', filters.created_by);
     if (filters.financing_type) add('? = ANY(v.financing_types)', filters.financing_type);
+    if (filters.credit_type) add('v.credit_type = ?', filters.credit_type);
     if (typeof filters.requires_price_exception === 'boolean') {
         add('v.requires_price_exception = ?', filters.requires_price_exception);
     }
@@ -261,7 +312,8 @@ export async function findById(applicationId, scope, db = { query }) {
                 v.proposed_down_payment AS proposed_down_payment_effective,
                 v.financed_amount, v.installments_count, v.proposed_installment,
                 v.requires_price_exception, v.financing_types,
-                v.requires_installment_exception, v.requires_exception
+                v.requires_installment_exception, v.requires_exception,
+                (SELECT s.status FROM sales s WHERE s.id = ca.sale_id) AS sale_status
            FROM v_credit_applications v
            JOIN credit_applications ca ON ca.id = v.id
           WHERE v.id = $1 AND ${scopeSql}`,
@@ -279,5 +331,6 @@ export async function findById(applicationId, scope, db = { query }) {
 
     // Los campos técnicos de idempotencia no forman parte del expediente.
     const { client_request_id, request_fingerprint, proposed_down_payment_effective, ...rest } = application;
-    return { ...rest, proposed_down_payment: proposed_down_payment_effective, items };
+    const workflow = await workflowDetails(applicationId, db);
+    return { ...rest, proposed_down_payment: proposed_down_payment_effective, items, ...workflow };
 }

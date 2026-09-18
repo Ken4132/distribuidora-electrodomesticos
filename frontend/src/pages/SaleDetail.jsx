@@ -26,7 +26,7 @@ export function puedeCobrar(sale, user, can) {
     if (can('payments.create')) return true;
     if (!can('payments.create.own')) return false;
     const esSuya = sale?.created_by != null && Number(sale.created_by) === Number(user?.id);
-    const esCredito = sale?.payment_mode === 'credito_4' || sale?.payment_mode === 'credito_8';
+    const esCredito = ['credito_4', 'credito_8', 'credito'].includes(sale?.payment_mode);
     return esSuya && esCredito;
 }
 
@@ -38,6 +38,7 @@ export default function SaleDetail() {
     const [error, setError] = useState('');
     const [payOpen, setPayOpen] = useState(false);
     const [cancelOpen, setCancelOpen] = useState(false);
+    const [voiding, setVoiding] = useState(null);
 
     const load = useCallback(async () => {
         try {
@@ -81,13 +82,31 @@ export default function SaleDetail() {
                             Registrar pago
                         </button>
                     )}
-                    {can('sales.cancel') && sale.status === 'activa' && Number(sale.paid_amount) === 0 && (
+                    {can('sales.cancel') && sale.status === 'activa' && (
                         <button className="btn btn--ghost" onClick={() => setCancelOpen(true)}>
                             Anular venta
                         </button>
                     )}
                 </div>
             </div>
+
+            {sale.cancellation && (
+                <div className="alert alert--error">
+                    <strong>Venta anulada</strong> el {formatDateTime(sale.cancellation.cancelled_at)} por{' '}
+                    {sale.cancellation.cancelled_by_username ?? '—'}. Motivo: {sale.cancellation.reason}
+                    <div className="small">
+                        {Number(sale.cancellation.payments_voided_count) > 0
+                            ? `Pagos revertidos: ${sale.cancellation.payments_voided_count} por ${money(sale.cancellation.payments_voided_amount)}.`
+                            : 'No tenía pagos aplicados.'}
+                        {Number(sale.cancellation.down_payment_reverted) > 0
+                            ? ` Enganche revertido: ${money(sale.cancellation.down_payment_reverted)}.`
+                            : ''}{' '}
+                        Stock restituido:{' '}
+                        {(sale.cancellation.stock_restored ?? []).reduce((a, r) => a + Number(r.quantity ?? 0), 0)} unidad(es).
+                        Nada se borró: cuotas, pagos y líneas se conservan en el historial.
+                    </div>
+                </div>
+            )}
 
             <div className="cards">
                 <div className="card card--static">
@@ -199,6 +218,7 @@ export default function SaleDetail() {
                                     <th>Referencia</th>
                                     <th>Aplicado a</th>
                                     <th>Registrado</th>
+                                    {can('payments.void') && <th />}
                                 </tr>
                             </thead>
                             <tbody>
@@ -218,8 +238,17 @@ export default function SaleDetail() {
                                         <td className="muted small">
                                             {formatDateTime(p.created_at)}
                                             {p.created_by ? ` · ${p.created_by}` : ''}
-                                            {p.status === 'anulado' && ' · ANULADO'}
+                                            {p.status === 'anulado' && ` · ANULADO${p.void_reason ? `: ${p.void_reason}` : ''}`}
                                         </td>
+                                        {can('payments.void') && (
+                                            <td className="right">
+                                                {p.status === 'aplicado' && (
+                                                    <button className="btn btn--ghost btn--sm" onClick={() => setVoiding(p)}>
+                                                        Anular pago
+                                                    </button>
+                                                )}
+                                            </td>
+                                        )}
                                     </tr>
                                 ))}
                             </tbody>
@@ -234,6 +263,16 @@ export default function SaleDetail() {
                     onClose={() => setPayOpen(false)}
                     onSaved={() => {
                         setPayOpen(false);
+                        load();
+                    }}
+                />
+            )}
+            {voiding && (
+                <VoidPaymentModal
+                    payment={voiding}
+                    onClose={() => setVoiding(null)}
+                    onSaved={() => {
+                        setVoiding(null);
                         load();
                     }}
                 />
@@ -376,6 +415,47 @@ export function PaymentModal({ sale, onClose, onSaved }) {
     );
 }
 
+function VoidPaymentModal({ payment, onClose, onSaved }) {
+    const toast = useToast();
+    const [reason, setReason] = useState('');
+    const [busy, setBusy] = useState(false);
+
+    async function submit(e) {
+        e.preventDefault();
+        setBusy(true);
+        try {
+            await paymentsApi.void(payment.id, reason);
+            toast.success('Pago anulado');
+            onSaved();
+        } catch (err) {
+            toast.error(err.fullMessage);
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    return (
+        <Modal open title={`Anular pago de ${money(payment.amount)}`} onClose={onClose}>
+            <form onSubmit={submit}>
+                <p className="alert alert--warn">
+                    El pago queda registrado como ANULADO (no se borra) y deja de contar para las cuotas y el saldo.
+                </p>
+                <Field label="Motivo de la anulación" required>
+                    <textarea className="input" rows={3} autoFocus value={reason} onChange={(e) => setReason(e.target.value)} />
+                </Field>
+                <div className="form-actions">
+                    <button type="button" className="btn btn--ghost" onClick={onClose}>
+                        Cancelar
+                    </button>
+                    <button className="btn btn--danger" disabled={busy || reason.trim().length < 3}>
+                        {busy ? 'Anulando…' : 'Anular pago'}
+                    </button>
+                </div>
+            </form>
+        </Modal>
+    );
+}
+
 function CancelModal({ sale, onClose, onSaved }) {
     const toast = useToast();
     const [reason, setReason] = useState('');
@@ -399,7 +479,10 @@ function CancelModal({ sale, onClose, onSaved }) {
         <Modal open title={`Anular venta ${sale.sale_number}`} onClose={onClose}>
             <form onSubmit={submit}>
                 <p className="alert alert--warn">
-                    Se devolverá al inventario el stock de los productos de esta venta. La operación queda registrada.
+                    El stock vuelve a la sucursal de la que salió cada producto. Nada se borra: la venta queda anulada y
+                    conserva sus cuotas, pagos y líneas. Si la venta tiene pagos aplicados, hay que anularlos antes
+                    (Administración). Si viene de una solicitud de crédito, la solicitud pasará a <strong>Venta
+                    anulada</strong>.
                 </p>
                 <Field label="Motivo de la anulación" required>
                     <textarea

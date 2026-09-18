@@ -28,6 +28,7 @@ export default function Users() {
     const debounced = useDebounce(search);
 
     const manages = can('users.manage');
+    const managesPermissions = can('users.permissions');
 
     const load = useCallback(async () => {
         setState((s) => ({ ...s, loading: true }));
@@ -159,6 +160,14 @@ export default function Users() {
                                             >
                                                 Contraseña
                                             </button>
+                                            {managesPermissions && (
+                                                <button
+                                                    className="btn btn--ghost btn--sm"
+                                                    onClick={() => setModal({ mode: 'permissions', data: u })}
+                                                >
+                                                    Permisos
+                                                </button>
+                                            )}
                                             <button
                                                 className="btn btn--ghost btn--sm"
                                                 disabled={u.id === me?.id}
@@ -200,6 +209,17 @@ export default function Users() {
                 onClose={() => setModal(null)}
             >
                 <PasswordForm user={modal?.data} onDone={() => setModal(null)} />
+            </Modal>
+
+            <Modal
+                open={modal?.mode === 'permissions'}
+                title={`Permisos de ${modal?.data?.username ?? ''}`}
+                wide
+                onClose={() => setModal(null)}
+            >
+                {modal?.mode === 'permissions' && (
+                    <UserPermissionsPanel user={modal.data} onChanged={load} />
+                )}
             </Modal>
 
             <Modal
@@ -490,6 +510,193 @@ function RolesPanel({ onChanged }) {
                     </div>
                 </div>
             ))}
+        </div>
+    );
+}
+
+/**
+ * PERMISOS ADICIONALES POR USUARIO (012).
+ *
+ * El rol sigue siendo la base. Aquí se concede (GRANT) o se retira (REVOKE)
+ * un permiso a UN usuario concreto, sin crear roles nuevos: es lo que permite
+ * que un Cobrador venda y concrete sus propias ventas sin convertir a todos
+ * los cobradores en vendedores.
+ */
+function UserPermissionsPanel({ user, onChanged }) {
+    const toast = useToast();
+    const [data, setData] = useState(null);
+    const [catalog, setCatalog] = useState([]);
+    const [code, setCode] = useState('');
+    const [effect, setEffect] = useState('GRANT');
+    const [reason, setReason] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+
+    const load = useCallback(async () => {
+        try {
+            const [perms, cat] = await Promise.all([usersApi.permissions(user.id), usersApi.permissionCatalog()]);
+            setData(perms.data);
+            setCatalog(cat.data);
+            setError('');
+        } catch (e) {
+            setError(e.message);
+        }
+    }, [user.id]);
+
+    useEffect(() => {
+        load();
+    }, [load]);
+
+    if (error) return <p className="alert alert--error">{error}</p>;
+    if (!data) return <Spinner />;
+
+    const fromRole = new Set(data.role_permissions ?? []);
+    const overrides = data.user_permissions ?? [];
+    const effective = new Set(data.effective_permissions ?? []);
+
+    async function submit(e) {
+        e.preventDefault();
+        if (reason.trim().length < 5 || !code) return;
+        setBusy(true);
+        try {
+            await usersApi.setPermission(user.id, { permission_code: code, effect, reason: reason.trim() });
+            toast.success(effect === 'GRANT' ? 'Permiso concedido' : 'Permiso retirado');
+            setCode('');
+            setReason('');
+            await load();
+            onChanged?.();
+        } catch (err) {
+            toast.error(err.fullMessage ?? err.message);
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function clear(permissionCode) {
+        const motivo = window.prompt('Motivo para quitar la excepción (mínimo 5 caracteres):', '');
+        if (motivo === null) return;
+        if (motivo.trim().length < 5) {
+            toast.error('Indica el motivo (al menos 5 caracteres)');
+            return;
+        }
+        try {
+            await usersApi.clearPermission(user.id, { permission_code: permissionCode, reason: motivo.trim() });
+            toast.success('El usuario vuelve a los permisos de su rol');
+            await load();
+            onChanged?.();
+        } catch (err) {
+            toast.error(err.fullMessage ?? err.message);
+        }
+    }
+
+    return (
+        <div>
+            <p className="muted small">
+                Rol <strong>{data.user.role}</strong>: {fromRole.size} permiso(s). Aquí se suman o se quitan permisos a
+                este usuario en particular. El cambio surte efecto de inmediato y queda en la bitácora.
+            </p>
+
+            {overrides.length === 0 ? (
+                <p className="muted">Este usuario tiene exactamente los permisos de su rol.</p>
+            ) : (
+                <div className="table-wrap">
+                    <table className="table">
+                        <thead>
+                            <tr>
+                                <th>Permiso</th>
+                                <th>Efecto</th>
+                                <th>Motivo</th>
+                                <th>Concedido por</th>
+                                <th />
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {overrides.map((o) => (
+                                <tr key={o.permission_code}>
+                                    <td>
+                                        <span className="mono">{o.permission_code}</span>
+                                        <div className="muted small">{o.permission_name}</div>
+                                    </td>
+                                    <td>
+                                        <Badge status={o.effect === 'GRANT' ? 'pagada' : 'vencida'}>
+                                            {o.effect === 'GRANT' ? 'Concedido' : 'Retirado'}
+                                        </Badge>
+                                    </td>
+                                    <td className="small">{o.reason || '—'}</td>
+                                    <td className="small">
+                                        {o.granted_by_username ?? '—'}
+                                        <div className="muted">{formatDate(o.granted_at)}</div>
+                                    </td>
+                                    <td className="right">
+                                        <button className="btn btn--ghost btn--sm" onClick={() => clear(o.permission_code)}>
+                                            Quitar excepción
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+
+            <form onSubmit={submit} className="form-grid">
+                <Field label="Permiso" className="span-2" required>
+                    <select className="input input--select" value={code} onChange={(e) => setCode(e.target.value)}>
+                        <option value="">Selecciona un permiso…</option>
+                        {catalog.map((p) => (
+                            <option key={p.code} value={p.code}>
+                                {p.module} · {p.code} — {p.name}
+                                {fromRole.has(p.code) ? ' (ya lo trae el rol)' : ''}
+                            </option>
+                        ))}
+                    </select>
+                </Field>
+                <Field label="Efecto" className="span-1" required>
+                    <select className="input input--select" value={effect} onChange={(e) => setEffect(e.target.value)}>
+                        <option value="GRANT">Conceder</option>
+                        <option value="REVOKE">Retirar</option>
+                    </select>
+                </Field>
+                <Field label="Motivo" className="span-3" required hint="Queda registrado en la bitácora">
+                    <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} />
+                </Field>
+                <div className="span-3 right">
+                    <button className="btn btn--primary" disabled={busy || !code || reason.trim().length < 5}>
+                        {busy ? 'Guardando…' : 'Aplicar'}
+                    </button>
+                </div>
+            </form>
+
+            <p className="muted small">
+                Permisos efectivos ({effective.size}): <span className="mono">{[...effective].join(', ')}</span>
+            </p>
+
+            {(data.history ?? []).length > 0 && (
+                <div className="table-wrap">
+                    <table className="table">
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Acción</th>
+                                <th>Permiso</th>
+                                <th>Quién</th>
+                                <th>Motivo</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {data.history.map((h) => (
+                                <tr key={h.id}>
+                                    <td className="nowrap">{formatDate(h.changed_at)}</td>
+                                    <td>{h.action}</td>
+                                    <td className="mono">{h.permission_code}</td>
+                                    <td>{h.changed_by_username ?? '—'}</td>
+                                    <td className="small">{h.reason || '—'}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
         </div>
     );
 }

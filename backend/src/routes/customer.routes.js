@@ -9,6 +9,7 @@ import {
     updateCustomerSchema,
     listCustomersSchema,
     setActiveSchema,
+    confirmCustomerSchema,
 } from '../validators/customer.schema.js';
 
 const router = Router();
@@ -50,6 +51,38 @@ router.put(
         details: (req) => ({ campos: Object.keys(req.body ?? {}) }),
     }),
     ctrl.update
+);
+
+/**
+ * Reconfirmación de datos (regla 9): obligatoria antes de una nueva solicitud
+ * de crédito de un cliente que ya tiene operaciones.
+ */
+router.get(
+    '/:id/confirmations',
+    requirePermission('customers.view'),
+    validate({ params: idParam }),
+    ctrl.listConfirmations
+);
+
+router.post(
+    '/:id/confirmations',
+    requirePermission('customers.update'),
+    validate({ params: idParam, body: confirmCustomerSchema }),
+    audit('customer.confirm', {
+        module: MODULE,
+        entity: 'customer',
+        entityId: (req) => Number(req.params.id),
+        summary: (req, payload) =>
+            `Reconfirmó los datos del cliente ${payload?.data?.customer?.full_name}` +
+            (payload?.data?.confirmation?.changed_fields?.length
+                ? ` (cambió: ${payload.data.confirmation.changed_fields.join(', ')})`
+                : ' (sin cambios)'),
+        details: (req, payload) => ({
+            confirmacion_id: payload?.data?.confirmation?.id ?? null,
+            campos_modificados: payload?.data?.confirmation?.changed_fields ?? [],
+        }),
+    }),
+    ctrl.confirm
 );
 
 router.patch(
