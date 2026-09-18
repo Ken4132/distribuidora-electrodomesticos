@@ -40,14 +40,23 @@ router.post(
     audit('payment.create', {
         module: MODULE,
         entity: 'payment',
-        entityId: (req, payload) => payload?.data?.payments?.at(-1)?.id ?? null,
+        entityId: (req, payload) => payload?.data?.payment?.id ?? null,
         summary: (req, payload) =>
-            `Registró un pago de Q${Number(req.body?.amount).toFixed(2)} (${req.body?.method ?? 'efectivo'}) en la venta ${payload?.data?.sale?.sale_number}. Saldo: Q${payload?.data?.sale?.balance}`,
+            (payload?.replayed ? 'Reenvío de un pago ya registrado' : 'Registró un pago') +
+            ` de Q${Number(req.body?.amount).toFixed(2)} (${req.body?.method ?? 'efectivo'})` +
+            ` en la venta ${payload?.data?.sale?.sale_number}.` +
+            ` Saldo Q${payload?.data?.payment?.balance_before ?? '?'} → Q${payload?.data?.sale?.balance}`,
         details: (req, payload) => ({
+            pago_id: payload?.data?.payment?.id ?? null,
             venta: payload?.data?.sale?.sale_number,
             monto: Number(req.body?.amount).toFixed(2),
             metodo: req.body?.method ?? 'efectivo',
+            referencia: req.body?.reference ?? null,
+            fecha_real: payload?.data?.payment?.payment_date ?? null,
+            saldo_anterior: payload?.data?.payment?.balance_before ?? null,
             saldo_resultante: payload?.data?.sale?.balance,
+            estado_comprobante: payload?.data?.payment?.voucher_status ?? null,
+            reenvio: Boolean(payload?.replayed),
         }),
     }),
     ctrl.create
@@ -64,8 +73,11 @@ router.patch(
         entity: 'payment',
         entityId: (req) => Number(req.params.id),
         summary: (req, payload) =>
-            `Anuló el pago #${req.params.id} de la venta ${payload?.data?.sale_number}. Motivo: ${req.body?.reason}`,
+            `Anuló el pago P-${String(req.params.id).padStart(6, '0')} de la venta ${payload?.data?.sale_number}.` +
+            ` Saldo resultante Q${payload?.data?.balance}. Motivo: ${req.body?.reason}`,
         details: (req, payload) => ({
+            pago_id: Number(req.params.id),
+            venta: payload?.data?.sale_number,
             motivo: req.body?.reason,
             saldo_resultante: payload?.data?.balance,
         }),

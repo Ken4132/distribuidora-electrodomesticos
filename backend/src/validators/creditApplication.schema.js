@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { isoDate, pagination, optionalBusinessText } from './common.schema.js';
 import { centsToMoney, isMoneyString, moneyToCents } from '../utils/creditPricing.js';
-import { PAYMENT_METHODS } from './payment.schema.js';
+import { NEW_PAYMENT_METHODS } from './payment.schema.js';
 
 export const CREDIT_APPLICATION_STATUSES = Object.freeze([
     'SOLICITADO',
@@ -379,7 +379,9 @@ export const concretizeSchema = z
     .object({
         down_payment: strictMoney('El enganche real').default('0.00'),
         payment_method: z
-            .enum(PAYMENT_METHODS, { errorMap: () => ({ message: `Método de pago inválido (${PAYMENT_METHODS.join(', ')})` }) })
+            .enum(NEW_PAYMENT_METHODS, {
+                errorMap: () => ({ message: `Método de pago inválido (${NEW_PAYMENT_METHODS.join(', ')})` }),
+            })
             .optional(),
         payment_reference: z.string().trim().max(80).optional().nullable(),
         notes: optionalBusinessText(1000),

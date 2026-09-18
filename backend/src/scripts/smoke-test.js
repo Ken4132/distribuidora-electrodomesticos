@@ -330,7 +330,13 @@ async function main() {
     check('La cuota 2 sigue pendiente', pay1.body?.data?.installments?.[1]?.status === 'pendiente');
 
     // Pago parcial: debe repartirse dentro de la cuota 2
-    const pay2 = await api('POST', '/payments', { sale_id: saleId, amount: 500, method: 'transferencia' });
+    // Desde el bloque 4.1 la transferencia exige correlativo (regla PG4).
+    const sinReferencia = await api('POST', '/payments', { sale_id: saleId, amount: 500, method: 'transferencia' });
+    check('Una transferencia sin correlativo se rechaza (422)', sinReferencia.status === 422,
+        `recibido ${sinReferencia.status}`);
+    const pay2 = await api('POST', '/payments', {
+        sale_id: saleId, amount: 500, method: 'transferencia', reference: 'TRF-000123',
+    });
     check('Pago parcial registrado', pay2.status === 201);
     check("La cuota 2 queda 'parcial'", pay2.body?.data?.installments?.[1]?.status === 'parcial',
         `= ${pay2.body?.data?.installments?.[1]?.status}`);
@@ -340,7 +346,9 @@ async function main() {
 
     // Pago que cruza varias cuotas
     const rest = expectedTotal - cuota - 500;
-    const pay3 = await api('POST', '/payments', { sale_id: saleId, amount: rest, method: 'deposito' });
+    const pay3 = await api('POST', '/payments', {
+        sale_id: saleId, amount: rest, method: 'deposito', reference: 'BOL-000456',
+    });
     check('Pago final registrado', pay3.status === 201, JSON.stringify(pay3.body?.error ?? ''));
     check('Saldo final = 0.00', q(pay3.body?.data?.sale?.balance) === '0.00', `= ${pay3.body?.data?.sale?.balance}`);
     check("Estado de cuenta final = 'pagada'", pay3.body?.data?.sale?.account_status === 'pagada',

@@ -72,7 +72,8 @@ export async function findInstallments(saleId) {
 export async function findPayments(saleId) {
     const { rows } = await query(
         `SELECT p.id, p.payment_date, p.amount, p.method, p.reference, p.notes, p.status,
-                p.voided_at, p.void_reason, p.created_at, u.username AS created_by,
+                p.voucher_status, p.voided_at, p.void_reason, p.created_at, u.username AS created_by,
+                v.username AS voided_by_username,
                 COALESCE(
                     json_agg(json_build_object('installment_number', i.number, 'amount', pa.amount)
                              ORDER BY i.number) FILTER (WHERE pa.id IS NOT NULL),
@@ -80,10 +81,11 @@ export async function findPayments(saleId) {
                 ) AS allocations
            FROM payments p
            LEFT JOIN users u ON u.id = p.created_by
+           LEFT JOIN users v ON v.id = p.voided_by
            LEFT JOIN payment_allocations pa ON pa.payment_id = p.id
            LEFT JOIN installments i ON i.id = pa.installment_id
           WHERE p.sale_id = $1
-       GROUP BY p.id, u.username
+       GROUP BY p.id, u.username, v.username
        ORDER BY p.payment_date, p.id`,
         [saleId]
     );

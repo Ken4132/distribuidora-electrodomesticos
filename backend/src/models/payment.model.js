@@ -30,7 +30,7 @@ export async function list({ customerId = null, saleId = null, from = null, to =
                 p.sale_id,
                 'V-' || LPAD(p.sale_id::text, 6, '0') AS sale_number,
                 p.customer_id, c.full_name AS customer_name, c.dpi AS customer_dpi,
-                p.payment_date, p.amount, p.method, p.reference, p.notes, p.status,
+                p.payment_date, p.amount, p.method, p.reference, p.notes, p.status, p.voucher_status,
                 p.created_at, u.username AS created_by,
                 COUNT(*) OVER()::int AS total_count
            FROM payments p
@@ -62,9 +62,11 @@ export async function findById(id) {
 
 export async function createPayment(client, data) {
     const { rows } = await client.query(
-        `INSERT INTO payments (sale_id, customer_id, payment_date, amount, method, reference, notes, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-         RETURNING id, sale_id, customer_id, payment_date, amount, method, reference, notes, status, created_at`,
+        `INSERT INTO payments (sale_id, customer_id, payment_date, amount, method, reference, notes, created_by,
+                               voucher_status, client_request_id, request_fingerprint)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         RETURNING id, sale_id, customer_id, payment_date, amount, method, reference, notes, status,
+                   voucher_status, created_at`,
         [
             data.sale_id,
             data.customer_id,
@@ -74,9 +76,64 @@ export async function createPayment(client, data) {
             data.reference ?? null,
             data.notes ?? null,
             data.created_by ?? null,
+            data.voucher_status ?? null,
+            data.client_request_id ?? null,
+            data.request_fingerprint ?? null,
         ]
     );
     return rows[0];
+}
+
+/** Primer evento documental del pago (y los siguientes, en 4.2). */
+export async function recordVoucherEvent(client, event) {
+    await client.query(
+        `INSERT INTO payment_voucher_events (payment_id, from_status, to_status, action, actor_id, comment)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [
+            event.paymentId,
+            event.fromStatus ?? null,
+            event.toStatus,
+            event.action,
+            event.actorId ?? null,
+            event.comment ?? null,
+        ]
+    );
+}
+
+/**
+ * Pago ya registrado con esta clave de idempotencia por este usuario.
+ * Mismo patrón que `creditApplication.model.findByRequestKey` (migración 007).
+ */
+export async function findByRequestKey(userId, clientRequestId, db = { query }) {
+    const { rows } = await db.query(
+        `SELECT id, sale_id, request_fingerprint
+           FROM payments
+          WHERE created_by = $1 AND client_request_id = $2`,
+        [userId, clientRequestId]
+    );
+    return rows[0] ?? null;
+}
+
+/**
+ * ¿Es este el ÚLTIMO pago aplicado de su venta?
+ *
+ * "Último" es el de mayor identificador entre los aplicados, que es el orden
+ * real de aplicación del FIFO; no el de fecha más reciente, porque la fecha
+ * económica puede venir atrasada a propósito.
+ *
+ * Devuelve el pago junto con el identificador del posterior que lo bloquea,
+ * si existe. Se consulta con la venta ya bloqueada por el servicio.
+ */
+export async function lastAppliedCheck(client, paymentId) {
+    const { rows } = await client.query(
+        `SELECT p.id, p.sale_id, p.status, p.amount,
+                (SELECT MAX(o.id) FROM payments o
+                  WHERE o.sale_id = p.sale_id AND o.status = 'aplicado' AND o.id > p.id) AS blocking_id
+           FROM payments p
+          WHERE p.id = $1`,
+        [paymentId]
+    );
+    return rows[0] ?? null;
 }
 
 export async function allocate(client, paymentId, installmentId, amount) {
@@ -108,12 +165,25 @@ export async function lockPendingInstallments(client, saleId) {
     return rows;
 }
 
-export async function voidPayment(client, paymentId, reason) {
+export async function voidPayment(client, paymentId, reason, userId = null) {
     const { rows } = await client.query(
-        `UPDATE payments SET status = 'anulado', voided_at = now(), void_reason = $2
+        `UPDATE payments
+            SET status = 'anulado', voided_at = now(), void_reason = $2, voided_by = $3
           WHERE id = $1 AND status = 'aplicado'
-         RETURNING id, sale_id, customer_id, amount`,
-        [paymentId, reason ?? null]
+         RETURNING id, sale_id, customer_id, amount, voided_at`,
+        [paymentId, reason ?? null, userId]
+    );
+    return rows[0] ?? null;
+}
+
+/** ¿El pago forma parte de un depósito? (no lo saca de él: solo informa). */
+export async function depositOf(client, paymentId) {
+    const { rows } = await client.query(
+        `SELECT d.id, d.status, d.reference, 'D-' || LPAD(d.id::text, 6, '0') AS deposit_number
+           FROM deposit_payments dp
+           JOIN deposits d ON d.id = dp.deposit_id
+          WHERE dp.payment_id = $1`,
+        [paymentId]
     );
     return rows[0] ?? null;
 }

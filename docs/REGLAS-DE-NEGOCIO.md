@@ -191,7 +191,7 @@ monto abonado sigue visible en la columna "Pagado".
 
 ## 4. Pagos
 
-### P1 — Se aplican a la cuota más antigua ⚠️ ASUMIDA
+### P1 — Se aplican a la cuota más antigua ✅ DEFINIDA (bloque 4)
 
 Todo pago se asigna automáticamente a la cuota pendiente más antigua, y si
 sobra dinero continúa con la siguiente. **No se puede elegir a qué cuota
@@ -200,7 +200,7 @@ aplicar un pago.**
 Cada asignación queda registrada en `payment_allocations`, así que siempre se
 sabe qué parte de cada pago cubrió qué cuota.
 
-### P2 — Pago anticipado permitido, sin descuento ⚠️ ASUMIDA
+### P2 — Pago anticipado permitido, sin descuento ✅ DEFINIDA (bloque 4)
 
 Se puede pagar antes del vencimiento. El pago anticipado:
 
@@ -211,14 +211,14 @@ Se puede pagar antes del vencimiento. El pago anticipado:
 Un cliente que paga todo el primer día queda con la venta `pagada`, con el
 mismo total que si hubiera pagado en 8 meses.
 
-### P3 — Pago parcial permitido ⚠️ ASUMIDA
+### P3 — Pago parcial permitido ✅ DEFINIDA (bloque 4)
 
 Se acepta cualquier monto mayor a cero, aunque sea menor a la cuota. La cuota
 queda `parcial` (o `vencida` si ya pasó su fecha) con el saldo restante.
 
 No hay monto mínimo de abono.
 
-### P4 — Sobrepago prohibido ⚠️ ASUMIDA
+### P4 — Sobrepago prohibido ✅ DEFINIDA (bloque 4)
 
 Un pago mayor al saldo pendiente **se rechaza** con un error claro. No se
 generan saldos a favor ni anticipos para futuras compras.
@@ -226,7 +226,7 @@ generan saldos a favor ni anticipos para futuras compras.
 El formulario limita el monto y ofrece dos atajos: "cuota completa" y
 "saldar todo".
 
-### P5 — Venta completamente pagada ⚠️ ASUMIDA
+### P5 — Venta completamente pagada ✅ DEFINIDA (bloque 4)
 
 Cuando lo pagado cubre el total:
 
@@ -235,15 +235,34 @@ Cuando lo pagado cubre el total:
 - **no admite más pagos** (error 409),
 - se emite el evento `sale.paid` para n8n.
 
-### P6 — Métodos de pago ⚠️ ASUMIDA
+### P6 — Métodos de pago ✅ DEFINIDA (2026-09-18)
 
-Efectivo, transferencia, depósito, tarjeta, cheque y otro. Se puede anotar una
-referencia (número de boleta) y observaciones.
+Los métodos **operativos** son cinco:
 
-### P7 — Anulación de pago (solo admin) ⚠️ ASUMIDA
+**efectivo · transferencia · depósito · remesa · tarjeta**
 
-Un pago se puede anular; sus asignaciones se eliminan y el saldo vuelve a
-subir. El pago queda visible en el historial marcado como anulado, no se borra.
+`cheque` y `otro` se retiraron de la operación: el cheque prácticamente no se
+usa y "otro" era un comodín innecesario. Un pago **nuevo** con cualquiera de
+los dos se rechaza en el validador, en el servicio y en la base de datos
+(`trg_payments_method_operativo`).
+
+Los pagos **ya registrados** con esos métodos se conservan intactos: se leen,
+se consultan, se cobran y se anulan igual que siempre, conservando su método
+original. No se convierten ni se reinterpretan, y la restricción de la base
+los sigue admitiendo para que ninguna fila guardada deje de ser válida.
+
+Se puede anotar una referencia (número de boleta o correlativo) y
+observaciones; cuándo es obligatoria lo define PG9.
+
+### P7 — Anulación de pago (solo admin) ✅ DEFINIDA (bloque 4, ver §13 PG3)
+
+Un pago se puede anular y el saldo vuelve a subir. El pago queda en el
+historial marcado como `anulado`, con su motivo, y **sus asignaciones a cuotas
+se conservan**: las vistas solo suman los pagos en estado `aplicado`, así que
+el saldo sube sin destruir la trazabilidad de a qué cuota fue cada quetzal.
+
+Desde el bloque 4 solo se anula el **último pago aplicado** de la venta
+(§13 PG3), y la fecha real del pago tiene límites propios (§13 PG1).
 
 ---
 
@@ -1014,6 +1033,145 @@ reinterpretan; lo único que ya no se puede es registrar una venta nueva con
 ellas. La protección está en tres capas: validador, servicio y base de datos
 (`trg_sales_credit_origin`). El formulario de venta tampoco las ofrece.
 
+---
+
+## 13. Pagos — fundación del bloque 4.0 ✅ DEFINIDA (2026-09-18)
+
+Migración `013_payments_foundation.sql`. Esta sección documenta la BASE: las
+estructuras y las guardas que sostienen el bloque 4. Los servicios, endpoints
+y pantallas llegan en 4.1 y siguientes.
+
+### PG1 — La fecha real del pago tiene límites ✅ DEFINIDA
+
+`payment_date` es la fecha en que el cliente pagó de verdad y `created_at` la
+fecha en que se registró en el sistema. **Son dos datos distintos y los dos se
+conservan.** La fecha real:
+
+- no puede ser **futura**;
+- no puede ser **anterior a la fecha de la venta**;
+- sí puede ser anterior a la de registro, incluso meses (un cobro que se
+  documenta tarde).
+
+Lo impone el trigger `trg_payments_guard_date` **solo sobre pagos nuevos**: no
+revalida ni corrige ninguno de los ya registrados.
+
+### PG2 — El historial de pagos es inmutable ✅ DEFINIDA
+
+Un pago **no se borra jamás**: se anula. La distribución a cuotas
+(`payment_allocations`) tampoco se modifica ni se borra, porque es la prueba de
+a qué cuota fue cada quetzal. Las tres cosas están protegidas por trigger, no
+solo por el servicio.
+
+### PG3 — La anulación va en orden inverso al de aplicación ✅ DEFINIDA
+
+Solo se anula el **último pago aplicado** de la venta. Para anular uno anterior
+hay que anular antes los posteriores, y cada anulación queda registrada con su
+motivo.
+
+El motivo es el FIFO: las cuotas se llenaron en el orden en que entraron los
+pagos, así que anular uno intermedio dejaría una distribución que no
+corresponde a ningún recorrido posible. "Último" es el de mayor identificador
+—el orden real de aplicación—, no el de fecha más reciente, porque la fecha
+puede venir atrasada a propósito (PG1).
+
+⏳ La comprobación equivalente en el servicio, con su mensaje 409, es del
+bloque 4.1. Hoy la impone la base de datos.
+
+### PG4 — Estado del comprobante ≠ estado económico ✅ DEFINIDA
+
+`payments.voucher_status` lleva el estado **documental**:
+`PENDIENTE_DE_BOLETA`, `EN_REVISION`, `REVISADA`, `RECHAZADA`. Es independiente
+del estado económico: un pago en efectivo reduce el saldo en el acto y aun así
+queda pendiente de boleta hasta que llegue su respaldo.
+
+Los pagos anteriores al bloque 4 quedan en **NULL**, que significa "anterior al
+control documental". La columna no tiene valor por defecto justamente para no
+convertirlos de golpe en pagos "pendientes de boleta": eso sería reinterpretar
+el histórico. Cada cambio se guarda en `payment_voucher_events` (solo
+inserción).
+
+### PG5 — Depósitos ✅ DEFINIDA
+
+Un depósito agrupa varios pagos ya registrados. **No cambia la situación
+económica de nada**: el pago ya redujo el saldo cuando se registró. El depósito
+es control de caja y conciliación.
+
+| Estado | Cuándo |
+| ------ | ------ |
+| `REVISADO` | Lo registra quien depositó, declarando lo que llevó al banco |
+| `VALIDADO` | Administración o Gerencia lo dan por bueno. **Terminal** |
+
+La **observación**, la **explicación** del empleado y el **rechazo** no son
+estados: son eventos de `deposit_events` (solo inserción, con usuario, fecha y
+comentario). El depósito sigue `REVISADO` hasta que se valida.
+
+- Un pago pertenece **como mucho a un depósito** (restricción única global).
+- El monto **esperado no se almacena**: se calcula sumando los pagos incluidos
+  (`v_deposits`). Almacenar un derivado invita a que se desincronice.
+- Si lo declarado no coincide con lo cobrado, **se permite registrarlo**: la
+  diferencia se ve en la vista y la resuelve el revisor. Una diferencia **no
+  revierte ni borra ningún pago**.
+- Un depósito validado no vuelve a revisión ni cambia de importe.
+- Un pago ya depositado **sí se puede anular** (solo Administración). El
+  depósito lo **sigue listando** y `v_deposits` muestra por separado lo
+  esperado, lo anulado y lo efectivamente aplicado: la conciliación refleja la
+  afectación sin alterar ni ocultar el depósito.
+
+### PG6 — Recibo inmutable ⏳ ESTRUCTURA PREPARADA (bloque 4.2/4.3)
+
+`payment_receipts` guarda el recibo con todo congelado: número, fecha/hora,
+cliente, monto, saldo anterior, saldo nuevo, cuotas afectadas (distribución
+FIFO), usuario, sucursal, método y depósito/correlativo cuando corresponda.
+No se puede editar ni borrar; una corrección se hace **anulando el pago y
+emitiendo otro recibo**, nunca reescribiendo el histórico.
+
+**En 4.0 la tabla se crea vacía y nada la escribe todavía.** La emisión, la
+numeración y el envío (outbox → n8n → WhatsApp) son del bloque 4.2/4.3. El
+fallo de n8n o WhatsApp nunca debe deshacer el pago.
+
+### PG8 — Doble envío al cobrar ✅ DEFINIDA (bloque 4.1)
+
+`POST /payments` admite la cabecera opcional `Idempotency-Key`, **la misma
+mecánica que las solicitudes de crédito** (CR7): repetir la clave devuelve el
+pago que ya se registró (200, `replayed: true`) y reutilizarla con datos
+distintos responde 409. La clave es por usuario, así que dos cobradores no se
+estorban. La garantía última es el índice único `ux_payments_request`: aunque
+entren dos peticiones a la vez, la base deja pasar una sola.
+
+### PG9 — Respaldo documental al registrar ✅ DEFINIDA (bloque 4.1)
+
+| Método | Referencia | Estado documental inicial |
+| ------ | ---------- | ------------------------- |
+| Efectivo | opcional | `PENDIENTE_DE_BOLETA` |
+| **Remesa** | opcional | `PENDIENTE_DE_BOLETA` |
+| Depósito, transferencia | **obligatoria** | `EN_REVISION` |
+| Tarjeta | **obligatoria** | `EN_REVISION` |
+
+El criterio es uno solo: si el pago llega con respaldo, entra a revisión; si
+no, queda pendiente de boleta. `REVISADA` y `RECHAZADA` son el resultado de la
+revisión, que es del bloque 4.2.
+
+**Remesa** (decisión del propietario, 2026-09-18): se trata igual que el
+efectivo. Es dinero que entra a caja sin respaldo bancario propio, así que
+queda pendiente de boleta y la referencia es opcional. **No crea un estado
+documental nuevo**: reutiliza el del efectivo.
+
+La comprobación vive en `applyPaymentToSale`, el único punto por el que pasa
+todo el dinero, así que vale igual para el cobro normal y para el enganche de
+una venta a crédito. Cada registro deja su primer evento en
+`payment_voucher_events`.
+
+El estado inicial de **tarjeta** se deduce del mismo criterio: llega con
+comprobante, así que entra a revisión. `cheque` y `otro` ya no aplican: no se
+pueden registrar pagos nuevos con ellos.
+
+### PG7 — Lo que queda fuera ⏳
+
+- Permisos y endpoints de depósitos: **bloque 4.2**.
+- Revisión del comprobante (`REVISADA` / `RECHAZADA`): **bloque 4.2**.
+- Generación y envío de recibos: **bloque 4.2/4.3**.
+- Pantallas de cobranza, depósitos y conciliación: **bloque 4.4**.
+
 ## Lista de verificación
 
 Para revisar en la validación local. Marca lo que coincide con la operación
@@ -1029,10 +1187,9 @@ real y señala lo que hay que cambiar.
 | C1 | Los centavos sobrantes van a la **última** cuota | |
 | C2 | **No** se cobra mora ni recargo por atraso | |
 | C3 | Una cuota vencida con abono se muestra **vencida** | |
-| P1 | Los pagos se aplican a la cuota **más antigua**, sin poder elegir | |
-| P2 | El pago anticipado **no** da descuento ni reduce cuotas | |
-| P3 | Se acepta **cualquier** abono parcial, sin mínimo | |
-| P4 | El sobrepago se **rechaza** (no hay saldo a favor) | |
+
+
+
 | R2 | El precio sale exacto de la fórmula, **sin** redondeo comercial | |
 | R3 | **No** se puede poner un precio manual ni hacer descuentos | |
 | R5 | El precio **ya incluye** todo (sin línea de IVA) | |

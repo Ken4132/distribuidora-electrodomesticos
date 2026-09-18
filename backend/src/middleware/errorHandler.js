@@ -29,8 +29,23 @@ function translatePgError(err) {
             if (err.constraint === 'role_permissions_permission_code_fkey')
                 return AppError.unprocessable('Uno de los permisos indicados no existe');
             return AppError.badRequest('Referencia inválida: el registro relacionado no existe');
-        case '23001': // restrict_violation: bitácora de solo inserción (RN-0006)
-            return AppError.forbidden('La bitácora es de solo lectura y no puede modificarse');
+        case '23001': {
+            // restrict_violation. Lo usan todas las guardas de inmutabilidad y
+            // de orden del sistema: bitácora (RN-0006), evidencia del crédito,
+            // líneas retiradas, historial de pagos y orden de anulación.
+            //
+            // Cada una de esas guardas ya lanza un mensaje escrito para que lo
+            // lea una persona ("Solo se anula el último pago aplicado de la
+            // venta: primero hay que anular el pago #12"), así que se
+            // aprovecha en vez de sustituirlo por un texto genérico sobre la
+            // bitácora, que era lo que veía el usuario aunque estuviera
+            // tocando otra cosa. Es un conflicto de estado, no de permisos:
+            // 409, no 403.
+            const message = String(err.message ?? '').trim();
+            return message
+                ? AppError.conflict(message)
+                : AppError.conflict('La operación no está permitida sobre un registro histórico');
+        }
         case '23514': {
             // check_violation
             if (err.constraint === 'customers_dpi_format')
