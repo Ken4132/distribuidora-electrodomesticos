@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { collectionsApi, dashboardApi, paymentsApi } from '../services/api.js';
 import { useAuth } from '../context/AuthContext.jsx';
-import { BUCKET_BADGE, BUCKET_LABELS, formatDate, METHOD_LABELS, money } from '../utils/format.js';
-import { Badge, Spinner } from '../components/ui.jsx';
+import { formatDate, METHOD_LABELS, money } from '../utils/format.js';
+import { AgingBar, Spinner, Stat, Stats } from '../components/ui.jsx';
 
 /**
  * RESUMEN OPERATIVO.
@@ -51,48 +51,6 @@ export default function Dashboard() {
     const vencidos = (collections?.buckets ?? []).filter((b) => b.bucket !== 'AL_DIA');
     const creditosVencidos = vencidos.reduce((a, b) => a + Number(b.creditos), 0);
 
-    const cards = [
-        {
-            label: 'Clientes activos',
-            value: data.customers.active,
-            extra: `${data.customers.total} en total`,
-            to: '/clientes',
-        },
-        {
-            label: 'Créditos con saldo',
-            value: collections ? t.creditos : '—',
-            extra: collections ? `${creditosVencidos} con atraso` : 'Sin acceso a cartera',
-            to: '/cartera',
-            alert: creditosVencidos > 0,
-        },
-        {
-            label: 'Saldo de cartera',
-            value: collections ? money(t.saldo) : money(data.receivables.total_balance),
-            extra: 'Total por cobrar',
-            to: '/cartera',
-        },
-        {
-            label: 'Monto vencido',
-            value: collections ? money(t.saldo_vencido) : '—',
-            extra: `${data.receivables.overdue_sales} crédito(s) vencido(s)`,
-            to: '/cartera',
-            alert: Number(t.saldo_vencido) > 0 || data.receivables.overdue_sales > 0,
-        },
-        {
-            label: 'Ventas de hoy',
-            value: data.sales.today_count,
-            extra: money(data.sales.today_amount),
-            to: '/ventas',
-        },
-        {
-            label: 'Productos',
-            value: data.products.active,
-            extra: `${data.products.low_stock} con stock bajo`,
-            to: '/productos',
-            alert: data.products.low_stock > 0,
-        },
-    ];
-
     return (
         <div className="page">
             <div className="page__head">
@@ -107,41 +65,70 @@ export default function Dashboard() {
                 )}
             </div>
 
-            <div className="cards">
-                {cards.map((c) => (
-                    <Link key={c.label} to={c.to} className={`card ${c.alert ? 'card--alert' : ''}`}>
-                        <span className="card__label">{c.label}</span>
-                        <strong className="card__value">{c.value}</strong>
-                        <span className="card__extra">{c.extra}</span>
-                    </Link>
-                ))}
-            </div>
+            {/* Primero el dinero: cartera y mora. Es lo que se mira al abrir. */}
+            <Stats>
+                <Stat
+                    label="Saldo de cartera"
+                    value={collections ? money(t.saldo) : money(data.receivables.total_balance)}
+                    meta="Total por cobrar"
+                    tone="accent"
+                    to="/cartera"
+                />
+                <Stat
+                    label="Monto vencido"
+                    value={collections ? money(t.saldo_vencido) : '—'}
+                    meta={`${data.receivables.overdue_sales} crédito(s) con cuota vencida`}
+                    tone={Number(t.saldo_vencido) > 0 ? 'danger' : undefined}
+                    to="/cartera"
+                />
+                <Stat
+                    label="Créditos activos"
+                    value={collections ? t.creditos : '—'}
+                    meta={collections ? `${creditosVencidos} con atraso` : 'Sin acceso a cartera'}
+                    tone={creditosVencidos > 0 ? 'warn' : undefined}
+                    to="/cartera"
+                />
+                <Stat
+                    label="Ventas de hoy"
+                    value={data.sales.today_count}
+                    meta={money(data.sales.today_amount)}
+                    to="/ventas"
+                />
+                <Stat
+                    label="Clientes activos"
+                    value={data.customers.active}
+                    meta={`${data.customers.total} registrados`}
+                    to="/clientes"
+                />
+                <Stat
+                    label="Productos"
+                    value={data.products.active}
+                    meta={`${data.products.low_stock} con stock bajo`}
+                    tone={data.products.low_stock > 0 ? 'warn' : undefined}
+                    to="/productos"
+                />
+            </Stats>
 
             {collections && (
                 <section className="panel">
-                    <h2 className="panel__title">Morosidad por tramo</h2>
-                    <div className="cards">
-                        {(collections.buckets ?? []).map((b) => (
-                            <Link
-                                key={b.bucket}
-                                to={`/cartera?tramo=${b.bucket}`}
-                                className={`card ${b.bucket !== 'AL_DIA' && Number(b.creditos) > 0 ? 'card--alert' : ''}`}
-                            >
-                                <span className="card__label">{BUCKET_LABELS[b.bucket] ?? b.bucket}</span>
-                                <strong className="card__value">{b.creditos}</strong>
-                                <span className="card__extra">
-                                    {money(b.saldo)}
-                                    {Number(b.saldo_vencido) > 0 ? ` · vencido ${money(b.saldo_vencido)}` : ''}
-                                </span>
-                            </Link>
-                        ))}
+                    <div className="panel__head">
+                        <h2 className="panel__title">Distribución de la cartera por mora</h2>
+                        <Link className="btn btn--ghost btn--sm" to="/cartera">
+                            Ver cartera
+                        </Link>
                     </div>
+                    <AgingBar buckets={collections.buckets ?? []} />
                 </section>
             )}
 
             {verPagos && (
                 <section className="panel">
-                    <h2 className="panel__title">Pagos recientes</h2>
+                    <div className="panel__head">
+                        <h2 className="panel__title">Pagos recientes</h2>
+                        <Link className="btn btn--ghost btn--sm" to="/cobranza">
+                            Ver cobranza
+                        </Link>
+                    </div>
                     {payments === null ? (
                         <Spinner />
                     ) : payments.length === 0 ? (

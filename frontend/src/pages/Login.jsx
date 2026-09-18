@@ -30,8 +30,15 @@ export default function Login() {
     return (
         <div className="login">
             <form className="login__card" onSubmit={onSubmit}>
-                <h1 className="login__title">Distribuidora</h1>
-                <p className="login__sub">Sistema de gestión de ventas y créditos</p>
+                <div className="login__brand">
+                    <span className="sidebar__mark" aria-hidden="true">
+                        DE
+                    </span>
+                    <div>
+                        <h1 className="login__title">Distribuidora</h1>
+                        <p className="login__sub">Sistema de gestión de ventas y créditos</p>
+                    </div>
+                </div>
 
                 <Field label="Usuario" required>
                     <input

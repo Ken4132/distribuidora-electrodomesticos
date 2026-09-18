@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { collectionsApi, customersApi, paymentsApi, salesApi } from '../services/api.js';
 import { useAuth } from '../context/AuthContext.jsx';
-import { Badge, Spinner } from '../components/ui.jsx';
+import { Badge, Spinner, Stat, Stats } from '../components/ui.jsx';
 import { ReceiptModal } from '../components/ReceiptModal.jsx';
 import {
     ACCOUNT_STATUS_LABELS,
@@ -77,30 +77,30 @@ export default function CustomerDetail() {
                 </Link>
             </div>
 
-            <div className="cards">
-                <div className="card card--static">
-                    <span className="card__label">Total vendido</span>
-                    <strong className="card__value">{money(acc.total_sold)}</strong>
-                    <span className="card__extra">{acc.sales_count ?? 0} venta(s)</span>
-                </div>
-                <div className="card card--static">
-                    <span className="card__label">Total pagado</span>
-                    <strong className="card__value">{money(acc.total_paid)}</strong>
-                </div>
-                <div className={`card card--static ${Number(acc.total_balance) > 0 ? 'card--alert' : ''}`}>
-                    <span className="card__label">Saldo pendiente</span>
-                    <strong className="card__value">{money(acc.total_balance)}</strong>
-                    <span className="card__extra">
-                        {Number(acc.overdue_installments) > 0
+            <Stats>
+                <Stat label="Total vendido" value={money(acc.total_sold)} meta={`${acc.sales_count ?? 0} venta(s)`} />
+                <Stat label="Total pagado" value={money(acc.total_paid)} tone="ok" />
+                <Stat
+                    label="Saldo pendiente"
+                    value={money(acc.total_balance)}
+                    meta={
+                        Number(acc.overdue_installments) > 0
                             ? `${acc.overdue_installments} cuota(s) vencida(s)`
-                            : 'Sin cuotas vencidas'}
-                    </span>
-                </div>
-                <div className="card card--static">
-                    <span className="card__label">Próximo vencimiento</span>
-                    <strong className="card__value">{acc.next_due_date ? formatDate(acc.next_due_date) : '—'}</strong>
-                </div>
-            </div>
+                            : 'Sin cuotas vencidas'
+                    }
+                    tone={
+                        Number(acc.overdue_installments) > 0
+                            ? 'danger'
+                            : Number(acc.total_balance) > 0
+                              ? 'accent'
+                              : 'ok'
+                    }
+                />
+                <Stat
+                    label="Próximo vencimiento"
+                    value={acc.next_due_date ? formatDate(acc.next_due_date) : '—'}
+                />
+            </Stats>
 
             <section className="panel">
                 <h2 className="panel__title">Datos de contacto</h2>

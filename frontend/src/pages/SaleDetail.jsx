@@ -392,18 +392,24 @@ export function PaymentModal({ sale, onClose, onSaved }) {
                         ) : null}
                     </p>
 
-                    <div className="cards">
-                        <div className="card card--static">
-                            <span className="card__label">Saldo anterior</span>
-                            <strong className="card__value">{money(pago.balance_before)}</strong>
+                    <div className="figures">
+                        <div className="figure">
+                            <span className="figure__label">Saldo anterior</span>
+                            <span className="figure__value">{money(pago.balance_before)}</span>
                         </div>
-                        <div className="card card--static">
-                            <span className="card__label">Pagado</span>
-                            <strong className="card__value">{money(pago.amount)}</strong>
+                        <span className="figures__op" aria-hidden="true">
+                            −
+                        </span>
+                        <div className="figure figure--main">
+                            <span className="figure__label">Pagado</span>
+                            <span className="figure__value">{money(pago.amount)}</span>
                         </div>
-                        <div className="card card--static">
-                            <span className="card__label">Saldo nuevo</span>
-                            <strong className="card__value">{money(result.sale?.balance ?? pago.balance_after)}</strong>
+                        <span className="figures__op" aria-hidden="true">
+                            =
+                        </span>
+                        <div className="figure figure--result">
+                            <span className="figure__label">Saldo nuevo</span>
+                            <span className="figure__value">{money(result.sale?.balance ?? pago.balance_after)}</span>
                         </div>
                     </div>
 

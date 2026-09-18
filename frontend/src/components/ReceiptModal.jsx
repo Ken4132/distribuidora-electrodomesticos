@@ -45,71 +45,84 @@ export function ReceiptModal({ paymentId, onClose }) {
                         </p>
                     )}
 
-                    <dl className="datalist">
-                        <div>
-                            <dt>Emitido</dt>
-                            <dd>{formatDateTime(r.issued_at)}</dd>
-                        </div>
-                        <div>
-                            <dt>Fecha del pago</dt>
-                            <dd>{formatDate(r.payment_date)}</dd>
-                        </div>
-                        <div>
-                            <dt>Cliente</dt>
-                            <dd>
-                                {r.customer_name}
-                                <br />
-                                <span className="muted small">DPI {r.customer_dpi}</span>
-                            </dd>
-                        </div>
-                        <div>
-                            <dt>Venta</dt>
-                            <dd className="mono">{r.sale_number}</dd>
-                        </div>
-                        <div>
-                            <dt>Método</dt>
-                            <dd>
-                                {METHOD_LABELS[r.method] ?? r.method}
-                                {r.snapshot?.reference ? ` · ${r.snapshot.reference}` : ''}
-                            </dd>
-                        </div>
-                        <div>
-                            <dt>Sucursal</dt>
-                            <dd>{r.branch_name || '—'}</dd>
-                        </div>
-                        <div>
-                            <dt>Registró</dt>
-                            <dd>{r.issued_by_username || '—'}</dd>
-                        </div>
-                        <div>
-                            <dt>Comprobante</dt>
-                            <dd>{VOUCHER_STATUS_LABELS[r.voucher_status] ?? '—'}</dd>
-                        </div>
-                        {r.current_deposit_number && (
+                    {/* El recibo se presenta como documento, no como formulario:
+                        correlativo arriba, cifras en el centro, detalle abajo. */}
+                    <div className="receipt__doc">
+                        <div className="receipt__head">
                             <div>
-                                <dt>Depósito</dt>
-                                <dd className="mono">{r.current_deposit_number}</dd>
+                                <span className="stat__label">Recibo de pago</span>
+                                <div className="receipt__no">{r.receipt_number}</div>
+                                <span className="muted small">Emitido {formatDateTime(r.issued_at)}</span>
                             </div>
-                        )}
-                    </dl>
+                            <div className="right">
+                                <span className="stat__label">Cliente</span>
+                                <div className="strong">{r.customer_name}</div>
+                                <span className="muted small mono">DPI {r.customer_dpi}</span>
+                            </div>
+                        </div>
 
-                    <div className="cards">
-                        <div className="card card--static">
-                            <span className="card__label">Saldo anterior</span>
-                            <strong className="card__value">{money(r.balance_before)}</strong>
-                        </div>
-                        <div className="card card--static">
-                            <span className="card__label">Monto pagado</span>
-                            <strong className="card__value">{money(r.amount)}</strong>
-                        </div>
-                        <div className="card card--static">
-                            <span className="card__label">Saldo nuevo</span>
-                            <strong className="card__value">{money(r.balance_after)}</strong>
+                        <div className="receipt__body">
+                            <div className="figures">
+                                <div className="figure">
+                                    <span className="figure__label">Saldo anterior</span>
+                                    <span className="figure__value">{money(r.balance_before)}</span>
+                                </div>
+                                <span className="figures__op" aria-hidden="true">
+                                    −
+                                </span>
+                                <div className="figure figure--main">
+                                    <span className="figure__label">Monto pagado</span>
+                                    <span className="figure__value">{money(r.amount)}</span>
+                                </div>
+                                <span className="figures__op" aria-hidden="true">
+                                    =
+                                </span>
+                                <div className="figure figure--result">
+                                    <span className="figure__label">Saldo nuevo</span>
+                                    <span className="figure__value">{money(r.balance_after)}</span>
+                                </div>
+                            </div>
+
+                            <dl className="datalist">
+                                <div>
+                                    <dt>Fecha del pago</dt>
+                                    <dd>{formatDate(r.payment_date)}</dd>
+                                </div>
+                                <div>
+                                    <dt>Venta</dt>
+                                    <dd className="mono">{r.sale_number}</dd>
+                                </div>
+                                <div>
+                                    <dt>Método</dt>
+                                    <dd>
+                                        {METHOD_LABELS[r.method] ?? r.method}
+                                        {r.snapshot?.reference ? ` · ${r.snapshot.reference}` : ''}
+                                    </dd>
+                                </div>
+                                <div>
+                                    <dt>Sucursal</dt>
+                                    <dd>{r.branch_name || '—'}</dd>
+                                </div>
+                                <div>
+                                    <dt>Registró</dt>
+                                    <dd>{r.issued_by_username || '—'}</dd>
+                                </div>
+                                <div>
+                                    <dt>Comprobante</dt>
+                                    <dd>{VOUCHER_STATUS_LABELS[r.voucher_status] ?? '—'}</dd>
+                                </div>
+                                {r.current_deposit_number && (
+                                    <div>
+                                        <dt>Depósito</dt>
+                                        <dd className="mono">{r.current_deposit_number}</dd>
+                                    </div>
+                                )}
+                            </dl>
+
+                            <h3 className="panel__title">Cuotas afectadas</h3>
+                            <AllocationsTable allocations={r.allocations} />
                         </div>
                     </div>
-
-                    <h3 className="panel__title">Cuotas afectadas</h3>
-                    <AllocationsTable allocations={r.allocations} />
                 </div>
             )}
             <div className="form-actions">

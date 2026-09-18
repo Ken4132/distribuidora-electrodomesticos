@@ -127,13 +127,25 @@ export const BUCKET_LABELS = {
     MAS_90: 'Más de 90 días',
 };
 
-/** Tramo -> color de insignia ya existente. */
+/**
+ * Tramo -> insignia. Escala propia y progresiva: el rojo queda para el
+ * último tramo, que es el único realmente crítico.
+ */
 export const BUCKET_BADGE = {
     AL_DIA: 'al_dia',
-    '1_30': 'parcial',
-    '31_60': 'pendiente',
-    '61_90': 'vencida',
-    MAS_90: 'vencida',
+    '1_30': 'mora1',
+    '31_60': 'mora2',
+    '61_90': 'mora3',
+    MAS_90: 'mora4',
+};
+
+/** Clave de color de cada tramo para la barra de distribución de mora. */
+export const BUCKET_TONE = {
+    AL_DIA: 'al_dia',
+    '1_30': 'mora1',
+    '31_60': 'mora2',
+    '61_90': 'mora3',
+    MAS_90: 'mora4',
 };
 
 export const VOUCHER_STATUS_LABELS = {

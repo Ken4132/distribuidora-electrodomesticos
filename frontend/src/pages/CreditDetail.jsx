@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { collectionsApi, salesApi } from '../services/api.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
-import { Badge, EmptyState, Field, Modal, Spinner } from '../components/ui.jsx';
+import { Badge, EmptyState, Field, Modal, Spinner, Stat, Stats } from '../components/ui.jsx';
 import { ReceiptModal } from '../components/ReceiptModal.jsx';
 import { PaymentModal, puedeCobrar } from './SaleDetail.jsx';
 import {
@@ -103,38 +103,30 @@ export default function CreditDetail() {
                 </div>
             </div>
 
-            <div className="cards">
-                <div className="card card--static">
-                    <span className="card__label">Total del crédito</span>
-                    <strong className="card__value">{money(c.total)}</strong>
-                    <span className="card__extra">
-                        {c.installments_paid}/{c.installments_count} cuotas pagadas
-                    </span>
-                </div>
-                <div className="card card--static">
-                    <span className="card__label">Pagado</span>
-                    <strong className="card__value">{money(c.paid_amount)}</strong>
-                </div>
-                <div className={`card card--static ${conSaldo ? 'card--alert' : ''}`}>
-                    <span className="card__label">Saldo pendiente</span>
-                    <strong className="card__value">{money(c.balance)}</strong>
-                    <span className="card__extra">
-                        <Badge status={c.account_status}>{ACCOUNT_STATUS_LABELS[c.account_status]}</Badge>
-                    </span>
-                </div>
-                <div className={`card card--static ${Number(c.days_overdue) > 0 ? 'card--alert' : ''}`}>
-                    <span className="card__label">Atraso</span>
-                    <strong className="card__value">
-                        {Number(c.days_overdue) > 0 ? `${c.days_overdue} días` : 'Al día'}
-                    </strong>
-                    <span className="card__extra">
-                        <Badge status={BUCKET_BADGE[c.overdue_bucket] ?? 'pendiente'}>
-                            {BUCKET_LABELS[c.overdue_bucket] ?? c.overdue_bucket}
-                        </Badge>
-                        {Number(c.overdue_balance) > 0 ? ` · vencido ${money(c.overdue_balance)}` : ''}
-                    </span>
-                </div>
-            </div>
+            <Stats>
+                <Stat
+                    label="Total del crédito"
+                    value={money(c.total)}
+                    meta={`${c.installments_paid}/${c.installments_count} cuotas pagadas`}
+                />
+                <Stat label="Pagado" value={money(c.paid_amount)} meta="Aplicado a cuotas" tone="ok" />
+                <Stat
+                    label="Saldo pendiente"
+                    value={money(c.balance)}
+                    meta={ACCOUNT_STATUS_LABELS[c.account_status]}
+                    tone={conSaldo ? 'accent' : 'ok'}
+                />
+                <Stat
+                    label="Atraso"
+                    value={Number(c.days_overdue) > 0 ? `${c.days_overdue} días` : 'Al día'}
+                    meta={
+                        Number(c.overdue_balance) > 0
+                            ? `${BUCKET_LABELS[c.overdue_bucket] ?? ''} · vencido ${money(c.overdue_balance)}`
+                            : BUCKET_LABELS[c.overdue_bucket] ?? ''
+                    }
+                    tone={Number(c.days_overdue) > 90 ? 'danger' : Number(c.days_overdue) > 0 ? 'warn' : 'ok'}
+                />
+            </Stats>
 
             <section className="panel">
                 <h2 className="panel__title">Cuotas</h2>

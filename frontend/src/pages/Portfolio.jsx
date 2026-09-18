@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { collectionsApi } from '../services/api.js';
 import { useToast } from '../context/ToastContext.jsx';
-import { Badge, EmptyState, Pagination, SearchInput, Spinner } from '../components/ui.jsx';
+import { AgingBar, Badge, EmptyState, Pagination, SearchInput, Spinner, Stat, Stats } from '../components/ui.jsx';
 import {
     ACCOUNT_STATUS_LABELS,
     BUCKET_BADGE,
@@ -97,14 +97,26 @@ export default function Portfolio() {
 
             {summary && <SummaryCards summary={summary} active={bucket} onPick={setBucket} />}
 
-            <div className="tabs">
-                <button className={`tab ${tab === 'creditos' ? 'tab--active' : ''}`} onClick={() => setTab('creditos')}>
+            <div className="seg" role="tablist" aria-label="Vista de la cartera">
+                <button
+                    type="button"
+                    className={`seg__btn ${tab === 'creditos' ? 'seg__btn--active' : ''}`}
+                    onClick={() => setTab('creditos')}
+                >
                     Créditos
                 </button>
-                <button className={`tab ${tab === 'vencidas' ? 'tab--active' : ''}`} onClick={() => setTab('vencidas')}>
+                <button
+                    type="button"
+                    className={`seg__btn ${tab === 'vencidas' ? 'seg__btn--active' : ''}`}
+                    onClick={() => setTab('vencidas')}
+                >
                     Cuotas vencidas
                 </button>
-                <button className={`tab ${tab === 'cuotas' ? 'tab--active' : ''}`} onClick={() => setTab('cuotas')}>
+                <button
+                    type="button"
+                    className={`seg__btn ${tab === 'cuotas' ? 'seg__btn--active' : ''}`}
+                    onClick={() => setTab('cuotas')}
+                >
                     Cuotas pendientes
                 </button>
             </div>
@@ -119,6 +131,11 @@ export default function Portfolio() {
                         </option>
                     ))}
                 </select>
+                {bucket && (
+                    <button type="button" className="btn btn--ghost btn--sm" onClick={() => setBucket('')}>
+                        Quitar filtro
+                    </button>
+                )}
                 {tab === 'creditos' && (
                     <select className="input input--select" value={status} onChange={(e) => setStatus(e.target.value)}>
                         <option value="">Todos los estados</option>
@@ -151,37 +168,29 @@ export default function Portfolio() {
 
 function SummaryCards({ summary, active, onPick }) {
     const t = summary.totales ?? {};
+    const vencidos = (summary.buckets ?? []).filter((b) => b.bucket !== 'AL_DIA');
+    const enMora = vencidos.reduce((a, b) => a + Number(b.creditos), 0);
+
     return (
         <>
-            <div className="cards">
-                <div className="card card--static">
-                    <span className="card__label">Créditos con saldo</span>
-                    <strong className="card__value">{t.creditos ?? 0}</strong>
-                </div>
-                <div className="card card--static">
-                    <span className="card__label">Saldo de cartera</span>
-                    <strong className="card__value">{money(t.saldo)}</strong>
-                </div>
-                <div className={`card card--static ${Number(t.saldo_vencido) > 0 ? 'card--alert' : ''}`}>
-                    <span className="card__label">Monto vencido</span>
-                    <strong className="card__value">{money(t.saldo_vencido)}</strong>
-                </div>
-            </div>
+            <Stats>
+                <Stat label="Créditos con saldo" value={t.creditos ?? 0} meta="En cartera viva" tone="accent" />
+                <Stat label="Saldo de cartera" value={money(t.saldo)} meta="Total por cobrar" />
+                <Stat
+                    label="Monto vencido"
+                    value={money(t.saldo_vencido)}
+                    meta={`${enMora} crédito(s) con atraso`}
+                    tone={Number(t.saldo_vencido) > 0 ? 'danger' : 'ok'}
+                />
+            </Stats>
 
-            <div className="cards">
-                {(summary.buckets ?? []).map((b) => (
-                    <button
-                        key={b.bucket}
-                        type="button"
-                        className={`card ${active === b.bucket ? 'card--alert' : ''}`}
-                        onClick={() => onPick(active === b.bucket ? '' : b.bucket)}
-                    >
-                        <span className="card__label">{BUCKET_LABELS[b.bucket] ?? b.bucket}</span>
-                        <strong className="card__value">{b.creditos}</strong>
-                        <span className="card__extra">{money(b.saldo)}</span>
-                    </button>
-                ))}
-            </div>
+            <section className="panel">
+                <div className="panel__head">
+                    <h2 className="panel__title">Distribución por tramo de mora</h2>
+                    <span className="muted small">Pulsa un tramo para filtrar</span>
+                </div>
+                <AgingBar buckets={summary.buckets ?? []} active={active} onPick={onPick} />
+            </section>
         </>
     );
 }
