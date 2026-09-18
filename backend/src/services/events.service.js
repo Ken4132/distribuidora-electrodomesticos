@@ -27,6 +27,12 @@ export const EVENT_TYPES = Object.freeze({
     PAYMENT_CREATED: 'payment.created',
     INSTALLMENT_UPCOMING: 'installment.upcoming',
     INSTALLMENT_OVERDUE: 'installment.overdue',
+    // Bloque 5. Mora prolongada: el seguimiento deja de ser un recordatorio y
+    // pasa a aviso formal. El canal lo decide n8n; el payload solo sugiere
+    // cuál corresponde.
+    INSTALLMENT_ESCALATED: 'installment.escalated',
+    // Bloque 5. Cambio de condiciones de un crédito vivo.
+    SALE_RESTRUCTURED: 'sale.restructured',
 });
 
 export const ALL_EVENT_TYPES = Object.values(EVENT_TYPES);

@@ -155,10 +155,13 @@ export async function lockPendingInstallments(client, saleId) {
         `SELECT i.id FROM installments i WHERE i.sale_id = $1 ORDER BY i.number FOR UPDATE`,
         [saleId]
     );
+    // `NOT is_superseded`: una cuota que una reestructuración sustituyó (bloque
+    // 5) conserva su historial pero ya no es deuda viva, así que no vuelve a
+    // recibir dinero. Mientras no haya reestructuraciones no excluye ninguna.
     const { rows } = await client.query(
         `SELECT id, number, due_date, amount, paid_amount, balance, status
            FROM v_installments
-          WHERE sale_id = $1 AND balance > 0
+          WHERE sale_id = $1 AND balance > 0 AND NOT is_superseded
        ORDER BY number`,
         [saleId]
     );

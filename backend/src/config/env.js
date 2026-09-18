@@ -156,6 +156,9 @@ export const config = {
         enabled: String(process.env.COLLECTIONS_SCAN_ENABLED ?? 'true').toLowerCase() === 'true',
         // Días de anticipación con que se avisa de una cuota por vencer.
         upcomingDays: Number(process.env.COLLECTIONS_UPCOMING_DAYS ?? 3),
+        // Días de atraso a partir de los cuales el seguimiento escala a un
+        // aviso formal (correo). Bloque 5.
+        escalateDays: Number(process.env.COLLECTIONS_ESCALATE_DAYS ?? 15),
         // Cada cuántos días se vuelve a avisar de una cuota vencida.
         // 0 = avisar una sola vez cuando se detecta el atraso.
         overdueRepeatDays: Number(process.env.COLLECTIONS_OVERDUE_REPEAT_DAYS ?? 0),

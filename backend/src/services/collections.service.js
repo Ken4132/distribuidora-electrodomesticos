@@ -31,7 +31,8 @@ import { today } from '../utils/dates.js';
  *   nuevo cada N días de mora y ni uno más.
  */
 export function alertKey(type, installmentId, daysOverdue = 0) {
-    if (type === EVENT_TYPES.INSTALLMENT_UPCOMING) {
+    if (type === EVENT_TYPES.INSTALLMENT_UPCOMING || type === EVENT_TYPES.INSTALLMENT_ESCALATED) {
+        // Una sola vez por cuota: el aviso formal no se repite.
         return `${type}:${installmentId}`;
     }
     const repeat = config.collections.overdueRepeatDays;
@@ -52,7 +53,11 @@ function buildPayload(row, kind) {
         paid_amount: row.paid_amount,
         balance: row.balance,
         days_to_due: kind === 'upcoming' ? row.days_to_due : undefined,
-        days_overdue: kind === 'overdue' ? row.days_overdue : undefined,
+        days_overdue: kind === 'upcoming' ? undefined : row.days_overdue,
+        // n8n decide el canal; el evento solo dice cuál corresponde según la
+        // política de cobranza: recordatorio por mensajería, aviso formal por
+        // correo cuando la mora se prolonga.
+        channel_hint: kind === 'escalated' ? 'email' : 'messaging',
         customer: {
             id: Number(row.customer_id),
             full_name: row.customer_name,
@@ -67,7 +72,10 @@ function buildPayload(row, kind) {
  * Ejecuta el barrido.
  * @returns {{ scanned_on: string, upcoming: number, overdue: number, skipped: number }}
  */
-export async function scanInstallments({ upcomingDays = config.collections.upcomingDays } = {}) {
+export async function scanInstallments({
+    upcomingDays = config.collections.upcomingDays,
+    escalateDays = config.collections.escalateDays,
+} = {}) {
     const scannedOn = today();
 
     // Cuotas que vencen exactamente dentro de `upcomingDays` días.
@@ -86,7 +94,17 @@ export async function scanInstallments({ upcomingDays = config.collections.upcom
        ORDER BY due_date, installment_id`
     );
 
-    let created = { upcoming: 0, overdue: 0 };
+    // MORA PROLONGADA (bloque 5): a partir de `escalateDays` días sin pagar,
+    // el seguimiento deja de ser un recordatorio y pasa a aviso formal. Es un
+    // evento distinto para que n8n pueda enrutarlo a otro canal sin adivinar.
+    const { rows: escalated } = await query(
+        `SELECT * FROM v_installment_alerts
+          WHERE days_overdue >= $1
+       ORDER BY due_date, installment_id`,
+        [escalateDays]
+    );
+
+    let created = { upcoming: 0, overdue: 0, escalated: 0 };
     let skipped = 0;
 
     for (const row of upcoming) {
@@ -113,10 +131,23 @@ export async function scanInstallments({ upcomingDays = config.collections.upcom
         else skipped += 1;
     }
 
-    const total = created.upcoming + created.overdue;
+    for (const row of escalated) {
+        const event = await recordEvent({
+            type: EVENT_TYPES.INSTALLMENT_ESCALATED,
+            aggregate: 'installment',
+            aggregateId: Number(row.installment_id),
+            payload: buildPayload(row, 'escalated'),
+            uniqueKey: alertKey(EVENT_TYPES.INSTALLMENT_ESCALATED, row.installment_id),
+        });
+        if (event) created.escalated += 1;
+        else skipped += 1;
+    }
+
+    const total = created.upcoming + created.overdue + created.escalated;
     if (total > 0) {
         console.log(
-            `[cobranza] barrido ${scannedOn}: ${created.upcoming} por vencer, ${created.overdue} vencida(s), ${skipped} ya avisada(s)`
+            `[cobranza] barrido ${scannedOn}: ${created.upcoming} por vencer, ${created.overdue} vencida(s), ` +
+                `${created.escalated} en mora prolongada, ${skipped} ya avisada(s)`
         );
         dispatchInBackground();
     }
@@ -124,7 +155,8 @@ export async function scanInstallments({ upcomingDays = config.collections.upcom
     return {
         scanned_on: scannedOn,
         upcoming_days: upcomingDays,
-        candidates: { upcoming: upcoming.length, overdue: overdue.length },
+        escalate_days: escalateDays,
+        candidates: { upcoming: upcoming.length, overdue: overdue.length, escalated: escalated.length },
         created,
         skipped,
     };
