@@ -1,4 +1,5 @@
 import * as service from '../services/payment.service.js';
+import * as receipts from '../services/receipt.service.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { NEW_PAYMENT_METHODS } from '../validators/payment.schema.js';
 import { idempotencyKeySchema } from '../validators/creditApplication.schema.js';
@@ -55,6 +56,11 @@ export const create = asyncHandler(async (req, res) => {
 export const voidOne = asyncHandler(async (req, res) => {
     const sale = await service.voidPayment(req.params.id, req.body.reason, actorFrom(req));
     res.json({ ok: true, data: sale, message: 'Pago anulado. El saldo de la venta vuelve a subir.' });
+});
+
+/** Recibo inmutable del pago (bloque 4.3). */
+export const receipt = asyncHandler(async (req, res) => {
+    res.json({ ok: true, data: await receipts.getReceiptOfPayment(req.params.id) });
 });
 
 export const receivables = asyncHandler(async (req, res) => {

@@ -8,6 +8,7 @@ import { today, isIsoDate } from '../utils/dates.js';
 import { recordEvent, EVENT_TYPES, dispatchInBackground } from './events.service.js';
 import { saleInScope, scopeDenialMessage, ownPortfolioFilter } from './scope.service.js';
 import { recordAudit } from './audit.service.js';
+import { issueReceipt } from './receipt.service.js';
 import { NEW_PAYMENT_METHODS } from '../validators/payment.schema.js';
 
 export const listPayments = (opts) => Payment.list(opts);
@@ -299,12 +300,34 @@ export async function applyPaymentToSale(client, sale, input, userId, options = 
         const due = toCents(installment.balance);
         const applied = Math.min(due, amountCents);
         await Payment.allocate(client, payment.id, installment.id, money(fromCents(applied)));
-        allocations.push({ installment_number: installment.number, amount: money(fromCents(applied)) });
+        allocations.push({
+            installment_id: Number(installment.id),
+            installment_number: installment.number,
+            due_date: installment.due_date,
+            amount: money(fromCents(applied)),
+        });
         amountCents -= applied;
     }
 
     const remainingCents = balanceCents - toCents(payment.amount);
     const fullyPaid = remainingCents <= 0;
+    const balanceAfter = money(fromCents(Math.max(remainingCents, 0)));
+
+    // RECIBO INMUTABLE (bloque 4.3).
+    //
+    // Se emite AQUÍ, con la transacción todavía abierta y después de repartir
+    // el FIFO, por dos razones: el recibo tiene que llevar la distribución
+    // REAL —no una prevista— y tiene que confirmarse junto con el pago. Si la
+    // transacción se cae, no queda ni pago, ni recibo, ni evento.
+    const receipt = await issueReceipt(client, {
+        payment,
+        sale,
+        allocations,
+        balanceBefore,
+        balanceAfter,
+        userId,
+        voucherStatus: voucher.status,
+    });
 
     await recordEvent(
         {
@@ -313,7 +336,11 @@ export async function applyPaymentToSale(client, sale, input, userId, options = 
             aggregateId: payment.id,
             payload: {
                 payment_id: payment.id,
-                receipt_number: `P-${String(payment.id).padStart(6, '0')}`,
+                payment_number: `P-${String(payment.id).padStart(6, '0')}`,
+                // Número del RECIBO emitido en esta misma transacción: es la
+                // referencia con la que n8n puede hablar del documento.
+                receipt_id: Number(receipt.id),
+                receipt_number: receipt.receipt_number,
                 sale_id: sale.id,
                 sale_number: `V-${String(sale.id).padStart(6, '0')}`,
                 payment_date: paymentDate,
@@ -321,7 +348,8 @@ export async function applyPaymentToSale(client, sale, input, userId, options = 
                 method: payment.method,
                 allocations,
                 balance_before: balanceBefore,
-                remaining_balance: money(fromCents(Math.max(remainingCents, 0))),
+                balance_after: balanceAfter,
+                remaining_balance: balanceAfter,
                 voucher_status: voucher.status,
                 reference: reference || null,
                 customer: {
@@ -354,9 +382,16 @@ export async function applyPaymentToSale(client, sale, input, userId, options = 
     }
 
     return {
-        payment: { ...payment, balance_before: balanceBefore, balance_after: money(fromCents(Math.max(remainingCents, 0))) },
+        payment: {
+            ...payment,
+            balance_before: balanceBefore,
+            balance_after: balanceAfter,
+            receipt_id: Number(receipt.id),
+            receipt_number: receipt.receipt_number,
+        },
         allocations,
         remainingCents,
+        receipt,
     };
 }
 

@@ -64,6 +64,15 @@ router.post(
 
 router.get('/:id', requirePermission('payments.view'), validate({ params: idParam }), ctrl.getOne);
 
+// Recibo inmutable del pago (bloque 4.3). Mismo permiso que consultar el
+// pago: el recibo no expone nada que el pago no exponga ya.
+router.get(
+    '/:id/receipt',
+    requirePermission('payments.view'),
+    validate({ params: idParam }),
+    ctrl.receipt
+);
+
 router.patch(
     '/:id/void',
     requirePermission('payments.void'),
