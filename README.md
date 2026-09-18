@@ -173,6 +173,9 @@ Recorre la interfaz como una persona (24 verificaciones) y deja capturas en
 | `npm run test:rate-limit` | Protección del login contra fuerza bruta (requiere la API levantada y `seed`) |
 | `npm run test:payments-base` | Fundación del sistema de pagos: bloque 4.0 (solo base de datos, no altera datos) |
 | `npm run test:payments` | Registro y anulación de pagos: FIFO, idempotencia, concurrencia y alcance (requiere la API levantada y `seed`) |
+| `npm run test:deposits` | Depósitos y conciliación: permisos, sucursal, diferencias, revisión, validación e inmutabilidad (requiere la API levantada y `seed`) |
+| `npm run test:receipts` | Recibos y outbox: emisión transaccional, saldos, FIFO congelado, idempotencia, inmutabilidad y permisos (requiere la API levantada y `seed`) |
+| `npm run test:collections` | Cartera, morosidad, reestructuración/regularización y avisos de cobranza (requiere la API levantada y `seed`) |
 | `npm run n8n:receiver` | Receptor local que simula el webhook de n8n |
 
 ### frontend

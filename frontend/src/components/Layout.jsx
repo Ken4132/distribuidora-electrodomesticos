@@ -15,6 +15,7 @@ const LINKS = [
     { to: '/ventas', label: 'Ventas', permission: 'sales.view' },
     // Cobranza la ven tanto quien consulta la cartera completa como quien
     // solo consulta la suya.
+    { to: '/cartera', label: 'Cartera', permission: ['receivables.view', 'receivables.view.own'] },
     { to: '/cobranza', label: 'Cobranza', permission: ['receivables.view', 'receivables.view.own'] },
     { to: '/creditos', label: 'Créditos', permission: ['credits.view', 'credits.view.own', 'credits.view.branch'] },
     { to: '/catalogo', label: 'Catálogo', permission: 'products.view' },

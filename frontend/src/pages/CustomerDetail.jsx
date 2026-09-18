@@ -1,14 +1,31 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { customersApi, salesApi } from '../services/api.js';
+import { collectionsApi, customersApi, paymentsApi, salesApi } from '../services/api.js';
+import { useAuth } from '../context/AuthContext.jsx';
 import { Badge, Spinner } from '../components/ui.jsx';
-import { ACCOUNT_STATUS_LABELS, formatDate, money, PAYMENT_MODE_LABELS } from '../utils/format.js';
+import { ReceiptModal } from '../components/ReceiptModal.jsx';
+import {
+    ACCOUNT_STATUS_LABELS,
+    BUCKET_BADGE,
+    BUCKET_LABELS,
+    formatDate,
+    METHOD_LABELS,
+    money,
+    PAYMENT_MODE_LABELS,
+} from '../utils/format.js';
 
 export default function CustomerDetail() {
     const { id } = useParams();
+    const { can } = useAuth();
     const [customer, setCustomer] = useState(null);
     const [sales, setSales] = useState([]);
+    const [credits, setCredits] = useState(null);
+    const [payments, setPayments] = useState(null);
+    const [receiptFor, setReceiptFor] = useState(null);
     const [error, setError] = useState('');
+
+    const verCartera = can('receivables.view', 'receivables.view.own');
+    const verPagos = can('payments.view');
 
     useEffect(() => {
         Promise.all([customersApi.get(id), salesApi.list({ customerId: id, pageSize: 50 })])
@@ -18,6 +35,24 @@ export default function CustomerDetail() {
             })
             .catch((e) => setError(e.message));
     }, [id]);
+
+    // Créditos vivos del cliente, con su atraso y su tramo de mora.
+    useEffect(() => {
+        if (!verCartera) return;
+        collectionsApi
+            .ofCustomer(id)
+            .then((r) => setCredits(r.data))
+            .catch(() => setCredits(null));
+    }, [id, verCartera]);
+
+    // Historial de pagos del cliente, con acceso a cada recibo.
+    useEffect(() => {
+        if (!verPagos) return;
+        paymentsApi
+            .list({ customerId: id, pageSize: 50 })
+            .then((r) => setPayments(r.data ?? []))
+            .catch(() => setPayments([]));
+    }, [id, verPagos]);
 
     if (error) return <p className="alert alert--error">{error}</p>;
     if (!customer) return <Spinner />;
@@ -92,6 +127,122 @@ export default function CustomerDetail() {
                     </div>
                 </dl>
             </section>
+
+            {credits && (
+                <section className="panel">
+                    <h2 className="panel__title">Créditos del cliente</h2>
+                    {credits.credits.length === 0 ? (
+                        <p className="muted">Este cliente no tiene créditos con saldo.</p>
+                    ) : (
+                        <>
+                            <p className="muted small">
+                                {credits.totals.creditos} crédito(s) · saldo {money(credits.totals.saldo)} · vencido{' '}
+                                {money(credits.totals.saldo_vencido)} · {credits.totals.cuotas_vencidas} cuota(s)
+                                vencida(s)
+                                {Number(credits.totals.dias_atraso_max) > 0
+                                    ? ` · atraso máximo ${credits.totals.dias_atraso_max} días`
+                                    : ''}
+                            </p>
+                            <div className="table-wrap">
+                                <table className="table">
+                                    <thead>
+                                        <tr>
+                                            <th>Crédito</th>
+                                            <th>Fecha</th>
+                                            <th className="right">Total</th>
+                                            <th className="right">Saldo</th>
+                                            <th className="center">Cuotas</th>
+                                            <th>Próx. vence</th>
+                                            <th className="center">Atraso</th>
+                                            <th>Mora</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {credits.credits.map((s) => (
+                                            <tr
+                                                key={s.sale_id}
+                                                className={Number(s.days_overdue) > 0 ? 'row--error' : ''}
+                                            >
+                                                <td>
+                                                    <Link className="link mono" to={`/cartera/creditos/${s.sale_id}`}>
+                                                        {s.sale_number}
+                                                    </Link>
+                                                </td>
+                                                <td>{formatDate(s.sale_date)}</td>
+                                                <td className="right">{money(s.total)}</td>
+                                                <td className="right strong">{money(s.balance)}</td>
+                                                <td className="center">
+                                                    {s.installments_paid}/{s.installments_count}
+                                                </td>
+                                                <td>{s.next_due_date ? formatDate(s.next_due_date) : '—'}</td>
+                                                <td className="center">
+                                                    {Number(s.days_overdue) > 0 ? `${s.days_overdue} d` : '—'}
+                                                </td>
+                                                <td>
+                                                    <Badge status={BUCKET_BADGE[s.overdue_bucket] ?? 'pendiente'}>
+                                                        {BUCKET_LABELS[s.overdue_bucket] ?? s.overdue_bucket}
+                                                    </Badge>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </>
+                    )}
+                </section>
+            )}
+
+            {verPagos && (
+                <section className="panel">
+                    <h2 className="panel__title">Historial de pagos</h2>
+                    {payments === null ? (
+                        <Spinner />
+                    ) : payments.length === 0 ? (
+                        <p className="muted">Este cliente todavía no tiene pagos registrados.</p>
+                    ) : (
+                        <div className="table-wrap">
+                            <table className="table">
+                                <thead>
+                                    <tr>
+                                        <th>Fecha</th>
+                                        <th>Crédito</th>
+                                        <th className="right">Monto</th>
+                                        <th>Método</th>
+                                        <th>Referencia</th>
+                                        <th className="right">Recibo</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {payments.map((p) => (
+                                        <tr key={p.id}>
+                                            <td>{formatDate(p.payment_date)}</td>
+                                            <td>
+                                                <Link className="link mono" to={`/ventas/${p.sale_id}`}>
+                                                    {p.sale_number}
+                                                </Link>
+                                            </td>
+                                            <td className="right strong">{money(p.amount)}</td>
+                                            <td>{METHOD_LABELS[p.method] ?? p.method}</td>
+                                            <td className="muted">{p.reference || '—'}</td>
+                                            <td className="right">
+                                                <button
+                                                    className="btn btn--sm btn--ghost"
+                                                    onClick={() => setReceiptFor(p.id)}
+                                                >
+                                                    Ver recibo
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </section>
+            )}
+
+            {receiptFor && <ReceiptModal paymentId={receiptFor} onClose={() => setReceiptFor(null)} />}
 
             <section className="panel">
                 <h2 className="panel__title">Historial de ventas</h2>

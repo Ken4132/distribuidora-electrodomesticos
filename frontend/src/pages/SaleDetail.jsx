@@ -4,6 +4,7 @@ import { paymentsApi, salesApi } from '../services/api.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { Badge, Field, Modal, Spinner } from '../components/ui.jsx';
+import { AllocationsTable, ReceiptModal } from '../components/ReceiptModal.jsx';
 import {
     ACCOUNT_STATUS_LABELS,
     formatDate,
@@ -12,6 +13,8 @@ import {
     METHOD_LABELS,
     money,
     PAYMENT_MODE_LABELS,
+    METHODS_REQUIRING_REFERENCE,
+    newRequestKey,
     todayIso,
 } from '../utils/format.js';
 
@@ -39,6 +42,7 @@ export default function SaleDetail() {
     const [payOpen, setPayOpen] = useState(false);
     const [cancelOpen, setCancelOpen] = useState(false);
     const [voiding, setVoiding] = useState(null);
+    const [receiptFor, setReceiptFor] = useState(null);
 
     const load = useCallback(async () => {
         try {
@@ -218,7 +222,7 @@ export default function SaleDetail() {
                                     <th>Referencia</th>
                                     <th>Aplicado a</th>
                                     <th>Registrado</th>
-                                    {can('payments.void') && <th />}
+                                    <th />
                                 </tr>
                             </thead>
                             <tbody>
@@ -240,15 +244,19 @@ export default function SaleDetail() {
                                             {p.created_by ? ` · ${p.created_by}` : ''}
                                             {p.status === 'anulado' && ` · ANULADO${p.void_reason ? `: ${p.void_reason}` : ''}`}
                                         </td>
-                                        {can('payments.void') && (
-                                            <td className="right">
-                                                {p.status === 'aplicado' && (
-                                                    <button className="btn btn--ghost btn--sm" onClick={() => setVoiding(p)}>
-                                                        Anular pago
-                                                    </button>
-                                                )}
-                                            </td>
-                                        )}
+                                        <td className="right">
+                                            <button
+                                                className="btn btn--ghost btn--sm"
+                                                onClick={() => setReceiptFor(p.id)}
+                                            >
+                                                Recibo
+                                            </button>
+                                            {can('payments.void') && p.status === 'aplicado' && (
+                                                <button className="btn btn--ghost btn--sm" onClick={() => setVoiding(p)}>
+                                                    Anular
+                                                </button>
+                                            )}
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -267,6 +275,7 @@ export default function SaleDetail() {
                     }}
                 />
             )}
+            {receiptFor && <ReceiptModal paymentId={receiptFor} onClose={() => setReceiptFor(null)} />}
             {voiding && (
                 <VoidPaymentModal
                     payment={voiding}
@@ -301,27 +310,60 @@ export function PaymentModal({ sale, onClose, onSaved }) {
     const [notes, setNotes] = useState('');
     const [errors, setErrors] = useState({});
     const [busy, setBusy] = useState(false);
+    // Métodos OPERATIVOS: los trae el backend. No se arman aquí, porque la
+    // lista cambió en el bloque 4.1 y `cheque`/`otro` ya no se admiten.
+    const [methods, setMethods] = useState(['efectivo']);
+    // Resultado del cobro: saldo anterior/nuevo y reparto FIFO tal como los
+    // devolvió el servidor.
+    const [result, setResult] = useState(null);
+    const [receiptFor, setReceiptFor] = useState(null);
+    // Una clave por intento: si el usuario da doble clic o reintenta, el
+    // backend devuelve el pago que ya registró en lugar de cobrar otra vez.
+    const [requestKey, setRequestKey] = useState(newRequestKey);
+
+    useEffect(() => {
+        paymentsApi
+            .methods()
+            .then((r) => {
+                const list = r.data ?? [];
+                if (list.length) {
+                    setMethods(list);
+                    setMethod((m) => (list.includes(m) ? m : list[0]));
+                }
+            })
+            .catch(() => {
+                /* si falla, se queda el efectivo, que siempre existe */
+            });
+    }, []);
 
     const balance = Number(sale.balance);
     const value = Number(amount) || 0;
-    const invalid = value <= 0 || value > balance;
+    const referenceRequired = METHODS_REQUIRING_REFERENCE.includes(method);
+    const missingReference = referenceRequired && !reference.trim();
+    const invalid = value <= 0 || value > balance || missingReference;
 
     async function submit(e) {
         e.preventDefault();
         setBusy(true);
         setErrors({});
         try {
-            const res = await paymentsApi.create({
-                sale_id: sale.id,
-                amount: value,
-                payment_date: date,
-                method,
-                reference: reference || '',
-                notes: notes || '',
-            });
+            const res = await paymentsApi.create(
+                {
+                    sale_id: sale.id,
+                    amount: value,
+                    payment_date: date,
+                    method,
+                    reference: reference || '',
+                    notes: notes || '',
+                },
+                requestKey
+            );
             toast.success(res.message);
-            onSaved();
+            setResult(res.data);
         } catch (err) {
+            // Una clave usada con datos distintos ya no sirve: se renueva para
+            // que el siguiente intento no choque con el anterior.
+            setRequestKey(newRequestKey());
             setErrors(err.fieldErrors);
             toast.error(err.fullMessage);
         } finally {
@@ -329,6 +371,65 @@ export function PaymentModal({ sale, onClose, onSaved }) {
         }
     }
 
+    function finish() {
+        setResult(null);
+        onSaved();
+    }
+
+    // ------------------------------------------------ CONFIRMACIÓN DEL COBRO
+    if (result) {
+        const pago = result.payment ?? {};
+        const ultimo = result.payments?.at(-1);
+        return (
+            <>
+                <Modal open title={`Pago registrado — ${result.sale?.sale_number ?? sale.sale_number}`} onClose={finish} wide>
+                    <p className="muted">
+                        Cliente: <strong>{result.sale?.customer_name ?? sale.customer_name}</strong>
+                        {pago.receipt_number ? (
+                            <>
+                                {' '}· Recibo <strong className="mono">{pago.receipt_number}</strong>
+                            </>
+                        ) : null}
+                    </p>
+
+                    <div className="cards">
+                        <div className="card card--static">
+                            <span className="card__label">Saldo anterior</span>
+                            <strong className="card__value">{money(pago.balance_before)}</strong>
+                        </div>
+                        <div className="card card--static">
+                            <span className="card__label">Pagado</span>
+                            <strong className="card__value">{money(pago.amount)}</strong>
+                        </div>
+                        <div className="card card--static">
+                            <span className="card__label">Saldo nuevo</span>
+                            <strong className="card__value">{money(result.sale?.balance ?? pago.balance_after)}</strong>
+                        </div>
+                    </div>
+
+                    <h3 className="panel__title">Cuotas afectadas</h3>
+                    <p className="muted small">
+                        El reparto lo decidió el servidor: la cuota más antigua primero, sin saltar ninguna.
+                    </p>
+                    <AllocationsTable allocations={ultimo?.allocations ?? []} />
+
+                    <div className="form-actions">
+                        {pago.id && (
+                            <button type="button" className="btn btn--ghost" onClick={() => setReceiptFor(pago.id)}>
+                                Ver recibo
+                            </button>
+                        )}
+                        <button type="button" className="btn btn--primary" onClick={finish}>
+                            Listo
+                        </button>
+                    </div>
+                </Modal>
+                {receiptFor && <ReceiptModal paymentId={receiptFor} onClose={() => setReceiptFor(null)} />}
+            </>
+        );
+    }
+
+    // ------------------------------------------------------------ FORMULARIO
     return (
         <Modal open title={`Registrar pago — ${sale.sale_number}`} onClose={onClose}>
             <form onSubmit={submit}>
@@ -380,17 +481,26 @@ export function PaymentModal({ sale, onClose, onSaved }) {
                     <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
                 </Field>
 
-                <Field label="Método de pago" required>
+                <Field label="Método de pago" required error={errors.method}>
                     <select className="input input--select" value={method} onChange={(e) => setMethod(e.target.value)}>
-                        {Object.entries(METHOD_LABELS).map(([k, label]) => (
+                        {methods.map((k) => (
                             <option key={k} value={k}>
-                                {label}
+                                {METHOD_LABELS[k] ?? k}
                             </option>
                         ))}
                     </select>
                 </Field>
 
-                <Field label="Referencia" error={errors.reference} hint="Número de boleta o transacción">
+                <Field
+                    label={`Referencia${referenceRequired ? '' : ' (opcional)'}`}
+                    required={referenceRequired}
+                    error={errors.reference}
+                    hint={
+                        referenceRequired
+                            ? 'Obligatoria con este método: número de boleta o transacción'
+                            : 'Número de boleta o transacción'
+                    }
+                >
                     <input className="input" value={reference} onChange={(e) => setReference(e.target.value)} />
                 </Field>
 
@@ -400,6 +510,11 @@ export function PaymentModal({ sale, onClose, onSaved }) {
 
                 {value > balance && (
                     <p className="alert alert--error">El monto no puede superar el saldo pendiente.</p>
+                )}
+                {missingReference && (
+                    <p className="alert alert--warn">
+                        Un pago por {METHOD_LABELS[method] ?? method} necesita el correlativo o número de comprobante.
+                    </p>
                 )}
 
                 <div className="form-actions">

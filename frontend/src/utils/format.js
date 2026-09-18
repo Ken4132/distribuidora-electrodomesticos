@@ -104,7 +104,46 @@ export const METHOD_LABELS = {
     efectivo: 'Efectivo',
     transferencia: 'Transferencia',
     deposito: 'Depósito',
+    remesa: 'Remesa',
     tarjeta: 'Tarjeta',
+    // Históricos: ya no se pueden registrar, pero se siguen leyendo.
     cheque: 'Cheque',
     otro: 'Otro',
+};
+
+/**
+ * Métodos que EXIGEN correlativo/referencia al registrar (regla PG9 del
+ * backend). Se replica aquí solo para avisar antes de enviar; quien decide y
+ * rechaza es el servidor.
+ */
+export const METHODS_REQUIRING_REFERENCE = ['transferencia', 'deposito', 'tarjeta'];
+
+/** Tramos de morosidad que devuelve la cartera (bloque 5). */
+export const BUCKET_LABELS = {
+    AL_DIA: 'Al día',
+    '1_30': '1 a 30 días',
+    '31_60': '31 a 60 días',
+    '61_90': '61 a 90 días',
+    MAS_90: 'Más de 90 días',
+};
+
+/** Tramo -> color de insignia ya existente. */
+export const BUCKET_BADGE = {
+    AL_DIA: 'al_dia',
+    '1_30': 'parcial',
+    '31_60': 'pendiente',
+    '61_90': 'vencida',
+    MAS_90: 'vencida',
+};
+
+export const VOUCHER_STATUS_LABELS = {
+    PENDIENTE_DE_BOLETA: 'Pendiente de boleta',
+    EN_REVISION: 'En revisión',
+    REVISADA: 'Revisada',
+    RECHAZADA: 'Rechazada',
+};
+
+export const RESTRUCTURING_KIND_LABELS = {
+    REESTRUCTURACION: 'Reestructuración',
+    REGULARIZACION: 'Regularización',
 };

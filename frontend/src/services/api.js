@@ -216,10 +216,34 @@ export const salesApi = {
 
 export const paymentsApi = {
     list: (params) => api.get('/payments', params),
+    get: (id) => api.get(`/payments/${id}`),
+    /** Métodos OPERATIVOS que admite el backend hoy (no incluye los históricos). */
     methods: () => api.get('/payments/methods'),
     receivables: (params) => api.get('/payments/receivables', params),
-    create: (data) => api.post('/payments', data),
+    /** `requestKey` va en Idempotency-Key: un doble clic no cobra dos veces. */
+    create: (data, requestKey) =>
+        api.post('/payments', data, requestKey ? { 'Idempotency-Key': requestKey } : undefined),
     void: (id, reason) => api.patch(`/payments/${id}/void`, { reason }),
+    /** Recibo inmutable del pago (bloque 4.3). */
+    receipt: (id) => api.get(`/payments/${id}/receipt`),
+};
+
+/** Recibos emitidos (bloque 4.3). */
+export const receiptsApi = {
+    list: (params) => api.get('/receipts', params),
+    get: (id) => api.get(`/receipts/${id}`),
+};
+
+/** Cartera, morosidad y reestructuración (bloque 5). */
+export const collectionsApi = {
+    portfolio: (params) => api.get('/collections', params),
+    summary: (params) => api.get('/collections/summary', params),
+    installments: (params) => api.get('/collections/installments', params),
+    overdue: (params) => api.get('/collections/overdue', params),
+    ofCustomer: (id) => api.get(`/collections/customers/${id}`),
+    credit: (id) => api.get(`/collections/credits/${id}`),
+    restructurings: (id) => api.get(`/collections/credits/${id}/restructurings`),
+    restructure: (id, data) => api.post(`/collections/credits/${id}/restructure`, data),
 };
 
 export const integrationsApi = {

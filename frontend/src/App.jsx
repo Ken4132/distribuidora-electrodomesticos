@@ -14,6 +14,8 @@ import NewSale from './pages/NewSale.jsx';
 import Sales from './pages/Sales.jsx';
 import SaleDetail from './pages/SaleDetail.jsx';
 import Receivables from './pages/Receivables.jsx';
+import Portfolio from './pages/Portfolio.jsx';
+import CreditDetail from './pages/CreditDetail.jsx';
 import Integrations from './pages/Integrations.jsx';
 import Users from './pages/Users.jsx';
 import Audit from './pages/Audit.jsx';
@@ -51,6 +53,22 @@ export default function App() {
                                     element={
                                         <ProtectedRoute permission={['receivables.view', 'receivables.view.own']}>
                                             <Receivables />
+                                        </ProtectedRoute>
+                                    }
+                                />
+                                <Route
+                                    path="/cartera"
+                                    element={
+                                        <ProtectedRoute permission={['receivables.view', 'receivables.view.own']}>
+                                            <Portfolio />
+                                        </ProtectedRoute>
+                                    }
+                                />
+                                <Route
+                                    path="/cartera/creditos/:id"
+                                    element={
+                                        <ProtectedRoute permission={['receivables.view', 'receivables.view.own']}>
+                                            <CreditDetail />
                                         </ProtectedRoute>
                                     }
                                 />

@@ -1172,6 +1172,325 @@ pueden registrar pagos nuevos con ellos.
 - Generación y envío de recibos: **bloque 4.2/4.3**.
 - Pantallas de cobranza, depósitos y conciliación: **bloque 4.4**.
 
+## 14. Depósitos y conciliación (bloque 4.2) ✅ DEFINIDA (2026-09-18)
+
+Un depósito agrupa pagos **ya registrados**. No mueve dinero: el saldo de la
+venta bajó cuando se registró el pago (bloque 4.1). El depósito es **control de
+caja**, y por eso nada de lo que ocurra aquí toca cuotas, asignaciones FIFO ni
+saldos.
+
+### DP1 — Estados ✅ DEFINIDA
+
+Dos, y no hay más:
+
+| Estado | Cuándo |
+| ------ | ------ |
+| `REVISADO` | Nace así, al registrarlo quien depositó |
+| `VALIDADO` | Administración o Gerencia lo dan por bueno. **Terminal** |
+
+`OBSERVADO`, `EXPLICADO` y `RECHAZADO` son **eventos del historial**, no
+estados: el depósito sigue `REVISADO`. Un rechazo no revierte ni saca ningún
+pago. La base lo impide por `CHECK`: `UPDATE ... SET status = 'RECHAZADO'`
+falla.
+
+### DP2 — Quién hace qué ✅ DEFINIDA (decisión del propietario, 2026-09-18)
+
+| Permiso | Rol | Para qué |
+| ------- | --- | -------- |
+| `deposits.view` | admin, gerencia, cobrador | Consultar depósitos y conciliación |
+| `deposits.create` | admin, **cobrador** | Registrar el depósito e incluir pagos |
+| `deposits.review` | admin, gerencia | Observar, rechazar (evento) y validar |
+| `deposits.override` | **solo admin** | Incluir un pago cuya venta no tiene sucursal |
+
+El **vendedor no arma depósitos**: cobra su cartera (regla U6) pero no maneja
+la caja. **Gerencia no los arma**: supervisa. Explicar una observación lo puede
+hacer quien crea depósitos o quien los revisa; el historial guarda quién fue.
+
+### DP2b — Separación de funciones ✅ DEFINIDA (decisión del propietario, 2026-09-18)
+
+**Quien registra un depósito no puede validar ese mismo depósito.** La
+validación la hace otro usuario con `deposits.review`.
+
+Vale igual si lo registró el cobrador que si lo registró administración: tener
+los dos permisos no autoriza a nadie a cerrar su propio movimiento de caja. El
+intento responde 403 (`SELF_VALIDATION`) y deja el depósito intacto en
+`REVISADO`.
+
+No crea estados ni roles nuevos. La restricción
+`deposits_validator_is_not_creator` (migración 017) lo impide también por SQL
+directo.
+
+### DP3 — Sucursal ✅ DEFINIDA
+
+Un depósito pertenece siempre a una sucursal, y es la del usuario que lo
+registra (`users.branch_id`), no la que venga en la petición: si el usuario
+pide otra, se rechaza con 403. Administración no tiene sucursal asignada, así
+que tiene que indicarla.
+
+La sucursal de un **pago** es la de su **venta** (`sales.branch_id`). No se le
+añade una columna de sucursal a `payments`: sería un dato derivado que se puede
+desincronizar. Un pago de otra sucursal no entra al depósito, y eso lo impide
+también un disparador, no solo el servicio.
+
+**Ventas históricas sin sucursal** (anteriores a la migración 005): el pago se
+rechaza. Solo **administración** (`deposits.override`) puede incluirlo, y el
+historial guarda que fue una excepción y quién la autorizó.
+
+### DP4 — Qué pago puede entrar ✅ DEFINIDA
+
+- Tiene que existir → si no, 404.
+- Tiene que estar **aplicado**: un pago **anulado no se incluye** (decisión del
+  propietario, 2026-09-18). Lo que sí sigue permitido es **anular un pago que ya
+  estaba depositado**.
+- Un pago pertenece **como mucho a un depósito** (UNIQUE global). Dos
+  inclusiones simultáneas del mismo pago: solo una gana.
+- No se admite el mismo pago repetido en la misma petición.
+- Un depósito **validado no admite más pagos**.
+
+Las cinco reglas están además en la base (migraciones 013 y 016): por SQL
+directo tampoco se pueden saltar.
+
+### DP5 — Conciliación ✅ DEFINIDA
+
+```text
+MONTO ESPERADO  = suma de los pagos APLICABLES incluidos   (v_deposits.applied_amount)
+MONTO DECLARADO = lo que el empleado declara haber depositado (declared_amount)
+DIFERENCIA      = declarado − esperado                     (v_deposits.difference)
+```
+
+La diferencia puede ser **cero, positiva o negativa**. No se fuerza a cero, no
+revierte ningún pago y **no impide validar**: quien revisa decide y su decisión
+queda en el historial con su nombre.
+
+`v_deposits` además expone `expected_amount`, que es el **bruto incluido antes
+de anulaciones**, y `voided_amount`. Así se ve que un depósito nació por Q300
+aunque hoy queden Q0 aplicados. El nombre `expected_amount` se conserva con el
+significado que tiene desde la migración 013 para no reinterpretar lo ya
+probado; el monto esperado de la conciliación es `applied_amount`.
+
+### DP6 — Un pago depositado que se anula ✅ DEFINIDA
+
+- **No** se saca del depósito ni se borra la relación.
+- Se conserva su monto original.
+- La conciliación lo refleja: `expected_amount` sigue contándolo como incluido,
+  `voided_amount` lo separa y `applied_amount` baja.
+- Queda un evento en el historial del depósito, que además señala el pago.
+- El depósito no cambia de estado ni se oculta.
+
+### DP7 — Inmutabilidad ✅ DEFINIDA
+
+- Un depósito **no se elimina** nunca.
+- La relación depósito↔pago no se edita ni se borra.
+- El historial (`deposit_events`) es de solo inserción.
+- Un depósito `VALIDADO` queda **congelado**: ni estado, ni monto, ni fecha, ni
+  banco, ni referencia, ni sucursal.
+- `validated_by` nunca puede coincidir con `created_by` (DP2b).
+- La sucursal de un depósito que ya tiene pagos no se puede cambiar.
+
+No existe edición destructiva ni corrección silenciosa. **Pendiente de definir:**
+qué hacer con un depósito registrado por error (ver 4.3).
+
+### DP8 — Auditoría ✅ DEFINIDA
+
+Cada operación deja entrada en la bitácora con el usuario, la cifra y la
+diferencia del momento: `deposit.create`, `deposit.payments.add`,
+`deposit.observe`, `deposit.explain`, `deposit.reject`, `deposit.validate`. Los
+intentos sin permiso quedan como `acceso.denegado`.
+
+### DP9 — Lo que queda fuera ⏳
+
+- Revisión del comprobante del pago (`REVISADA` / `RECHAZADA` en
+  `payment_voucher_events`): sigue pendiente, **bloque 4.3**.
+- Generación y envío de recibos (`payment_receipts`): **bloque 4.3**.
+- Corrección de un depósito registrado por error: **sin definir**.
+- Pantallas de cobranza, depósitos y conciliación: **bloque 4.4**.
+
+## 15. Recibos y outbox (bloque 4.3) ✅ DEFINIDA (2026-09-18)
+
+### RC1 — La cadena ✅ DEFINIDA
+
+```text
+PAGO  ->  RECIBO INMUTABLE  ->  EVENTO DE OUTBOX
+```
+
+Los tres se escriben en la **misma transacción**, dentro de
+`applyPaymentToSale`, que es el único punto por el que pasa todo el dinero. Si
+algo falla no queda ninguno de los tres: no hay recibos ni eventos huérfanos.
+Vale igual para el cobro normal y para el enganche de una venta a crédito.
+
+El recibo se emite **después** de repartir el FIFO, no antes: tiene que llevar
+la distribución **real**, no una prevista.
+
+### RC2 — El outbox es el que ya existía ✅ DEFINIDA
+
+4.3 **no crea** una bandeja de salida nueva. `integration_events` (migraciones
+001 y 002) ya es un outbox transaccional con idempotencia (`unique_key`),
+reintentos con espera creciente (`next_attempt_at`) e historial por intento
+(`integration_event_attempts`), y `recordEvent()` ya escribía dentro de la
+transacción del pago. Crear otra habría duplicado la lógica y roto el
+despachador de n8n.
+
+Lo único que cambia es el **payload** de `payment.created`, que ahora lleva
+`receipt_id`, `receipt_number`, `payment_number` y `balance_after`. El envío a
+n8n sigue ocurriendo **después del commit**, de forma asíncrona: cobrar nunca
+depende de que n8n esté vivo, y desde el servicio de pagos no se llama a
+ninguna API externa.
+
+### RC3 — Qué congela el recibo ✅ DEFINIDA
+
+Número, fecha/hora de emisión, pago, venta, cliente, **sucursal de la venta**,
+usuario que lo registró, fecha económica, método, monto, **saldo anterior**,
+**saldo posterior** y la **distribución FIFO** (cuota, vencimiento e importe de
+cada línea). En `snapshot` quedan además el correlativo del pago, el estado
+documental del comprobante en ese momento y los datos del cliente.
+
+La sucursal sale de la **venta**, no de quien cobra.
+
+### RC4 — Numeración ✅ DEFINIDA
+
+`R-00000001`, de una secuencia (`next_receipt_number()`). Único en toda la
+base.
+
+**Decisión consciente:** una secuencia **puede dejar huecos** (una transacción
+que termina en ROLLBACK consume el número). La alternativa —un contador con
+bloqueo— serializaría todos los cobros y contradiría las garantías de
+concurrencia del bloque 4.1. El recibo es un documento interno de
+trazabilidad, no un documento fiscal con exigencia de correlatividad.
+
+### RC5 — Inmutabilidad y correcciones ✅ DEFINIDA
+
+`payment_receipts` es de **solo inserción** (migración 013): no se edita ni se
+borra, ni por la aplicación ni por SQL directo. Un pago tiene **como mucho un
+recibo**.
+
+Además el recibo tiene que **cuadrar**:
+`balance_after = balance_before − amount` (restricción
+`payment_receipts_balance_math`).
+
+Una corrección **no reescribe el recibo**: se **anula el pago** con el
+mecanismo del bloque 4.1, que no cambia. El recibo se conserva intacto —mismo
+número, mismo monto, mismos saldos— y la consulta muestra al lado que su pago
+quedó anulado, con motivo, fecha y responsable.
+
+### RC6 — Depósito ✅ DEFINIDA
+
+Cuando se emite el recibo el pago **todavía no está en ningún depósito**: se
+incluye después (bloque 4.2). Por eso `deposit_id` nace NULL y **no se
+inventa**. La vista `v_payment_receipts` muestra por separado
+`current_deposit_number`, que es estado **vivo** del pago, no dato congelado.
+
+### RC7 — Consulta y permisos ✅ DEFINIDA
+
+```text
+GET /api/payments/:id/receipt    payments.view
+GET /api/receipts                payments.view
+GET /api/receipts/:id            payments.view
+```
+
+Se usa el **mismo permiso con el que ya se consultan los pagos**: el recibo no
+expone nada que el pago no exponga. **No se crea ningún permiso ni rol nuevo.**
+
+El aislamiento por sucursal se ofrece como **filtro** (`branchId`), no como
+restricción: hoy `payments.view` es global —el vendedor también lo tiene, en
+coherencia con `sales.view`— y convertirlo en un permiso con alcance sería
+cambiar una regla del bloque 1.
+
+### RC8 — Los pagos anteriores ✅ DEFINIDA
+
+Los recibos **no se emiten hacia atrás**. Un pago registrado antes de 4.3 no
+tiene recibo y consultarlo responde 404 con ese motivo. No se reinterpreta ni
+se completa ningún histórico.
+
+### RC9 — Lo que queda fuera ⏳
+
+- Evento `payment.voided` en el outbox: **no existe**. Hoy la anulación se
+  rastrea por `payments.voided_*`, la bitácora y el evento del depósito.
+- Generación del PDF/impresión del recibo y su envío por WhatsApp: **4.4**.
+- Pantallas de recibos: **4.4**.
+
+## 16. Cartera, morosidad y reestructuración (bloque 5) ✅ DEFINIDA (2026-09-18)
+
+### CB1 — Nada de la mora se almacena ✅ DEFINIDA
+
+Días de atraso, saldo vencido y tramo de morosidad se **calculan al
+consultar**, a partir de `due_date` y de los pagos aplicados. No hay columnas
+de "días restantes", ni estados nuevos de crédito o de cuota. Tramos:
+
+| Tramo | Atraso de la cuota vencida más antigua con saldo |
+| ----- | ------------------------------------------------ |
+| `AL_DIA` | ninguna vencida |
+| `1_30` | hasta 30 días |
+| `31_60` | 31 a 60 |
+| `61_90` | 61 a 90 |
+| `MAS_90` | más de 90 |
+
+### CB2 — Consulta y alcance ✅ DEFINIDA
+
+Se usa el par que ya existe desde el bloque 1: `receivables.view` (toda la
+empresa) y `receivables.view.own` (solo los créditos que registró el propio
+usuario, regla U6). **No se crea ningún permiso de consulta.** El filtro va en
+el SQL: lo que no corresponde al usuario no sale de la base. El detalle de un
+crédito ajeno responde **404**, no 403, para no revelar que existe.
+
+```text
+GET /api/collections                      cartera
+GET /api/collections/summary              resumen por tramo de mora
+GET /api/collections/installments         cuotas
+GET /api/collections/overdue              solo vencidas
+GET /api/collections/customers/:id        cartera de un cliente
+GET /api/collections/credits/:id          expediente: cuotas, pagos, recibos, reestructuraciones
+GET /api/collections/credits/:id/restructurings
+```
+
+### CB3 — Reestructuración y regularización ✅ DEFINIDA
+
+Permiso nuevo `credits.restructure`, **solo Administración y Gerencia**. La
+autorización **es** la operación: no hay un segundo proceso de aprobación.
+
+- **No crea una segunda deuda**: es el mismo crédito con otras condiciones.
+- Las cuotas anteriores con saldo **no se borran**: se marcan `superseded_at`
+  con su historial y sus asignaciones FIFO intactas, y dejan de ser deuda viva.
+- Las cuotas nuevas se numeran **a continuación**, así que el FIFO no cambia:
+  la más antigua sigue cobrándose primero.
+- **NUEVO SALDO = NUEVO TOTAL − LO YA PAGADO.** Lo exige también la base
+  (`restructuring_balance_math`). Un total menor que lo pagado se rechaza.
+- `sale_restructurings` es de **solo inserción** y guarda la foto de las
+  condiciones y cuotas anteriores.
+- Solo se reestructuran créditos del flujo actual (`payment_mode = 'credito'`).
+  Las ventas históricas `credito_4` / `credito_8` tienen el número de cuotas
+  fijado por una restricción de la base y no se reinterpretan.
+
+**Qué figura corresponde la decide el sistema, no quien la pide:**
+
+| Situación | Figura |
+| --------- | ------ |
+| Crédito excepcional a precio contado con saldo y **más de 60 días** desde la venta | `REGULARIZACION` (obligatoria) |
+| Cualquier otro caso | `REESTRUCTURACION` (emergencia / cambio de condiciones) |
+
+Una **regularización** se hace a un plazo mínimo de **6 cuotas mensuales**.
+
+### CB4 — Avisos de cobranza ✅ DEFINIDA
+
+Se usa el **outbox que ya existe** (`integration_events`). No se crea otro y no
+se llama a ninguna API externa desde Express: n8n decide canal y texto.
+
+| Evento | Cuándo | Sugerencia de canal |
+| ------ | ------ | ------------------- |
+| `installment.upcoming` | 3 días antes del vencimiento (`COLLECTIONS_UPCOMING_DAYS`) | mensajería |
+| `installment.overdue` | desde el día siguiente al vencimiento | mensajería |
+| `installment.escalated` | **15 días** de mora (`COLLECTIONS_ESCALATE_DAYS`) | **correo** |
+| `sale.restructured` | al reestructurar o regularizar | — |
+
+Todos llevan `unique_key`: repetir el barrido **no duplica el aviso**. El aviso
+de mora prolongada se emite **una sola vez** por cuota. Una cuota sustituida
+por una reestructuración **deja de generar avisos**.
+
+### CB5 — Lo que queda fuera ⏳
+
+- Credenciales reales de WhatsApp/correo: las pone n8n, no la aplicación.
+- Pantallas de cobranza y reestructuración: frontend.
+- Reestructurar una venta histórica `credito_4` / `credito_8`.
+
 ## Lista de verificación
 
 Para revisar en la validación local. Marca lo que coincide con la operación
