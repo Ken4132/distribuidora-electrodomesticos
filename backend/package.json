@@ -24,6 +24,7 @@
     "test:rate-limit": "node src/scripts/rate-limit-test.js",
     "test:payments-base": "node src/scripts/payments-foundation-test.js",
     "test:payments": "node src/scripts/payments-test.js",
+        "test:deposits": "node src/scripts/deposits-test.js",
     "n8n:receiver": "node src/scripts/n8n-receiver.js",
     "test:n8n": "node src/scripts/n8n-test.js"
   },

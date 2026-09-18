@@ -48,6 +48,22 @@ const exists = async (client, sql, params = []) => (await client.query(sql, para
 
 async function main() {
     console.log('\n=== Bloque 4.0: fundación del sistema de pagos ===\n');
+
+    // ESTADO DE PARTIDA.
+    //
+    // La base real es ACUMULATIVA: los datos de la operación y de las suites
+    // anteriores siguen ahí y deben seguir. Esta prueba no puede exigir que
+    // esté vacía; lo único que le corresponde exigir es que ELLA no la cambie.
+    // Se mide antes y después, y se compara.
+    const { rows: [antes] } = await pool.query(
+        `SELECT (SELECT COUNT(*) FROM deposits)::int         AS depositos,
+                (SELECT COUNT(*) FROM deposit_payments)::int  AS depositos_pagos,
+                (SELECT COUNT(*) FROM deposit_events)::int    AS depositos_eventos,
+                (SELECT COUNT(*) FROM payment_receipts)::int  AS recibos,
+                (SELECT COUNT(*) FROM payments)::int          AS pagos,
+                (SELECT COUNT(*) FROM sales)::int             AS ventas,
+                (SELECT COUNT(*) FROM customers)::int         AS clientes`);
+
     const client = await pool.connect();
 
     try {
@@ -71,8 +87,16 @@ async function main() {
             voucher?.is_nullable === 'YES' && voucher?.column_default === null,
             JSON.stringify(voucher));
 
+        // Lo que hay que comprobar es que la vista EXISTE y se puede leer con
+        // esta misma conexión. Exigir que devuelva cero filas era medir el
+        // estado global de la base, no la migración: contra una base real y
+        // acumulativa ahí ya hay depósitos de la operación, y debe haberlos.
+        const vistaDefinida = await exists(client,
+            `SELECT COUNT(*)::int AS n FROM pg_views WHERE viewname = 'v_deposits'`);
         const vista = await exists(client, `SELECT COUNT(*)::int AS n FROM v_deposits`);
-        check('La vista de conciliación v_deposits es consultable', vista?.n === 0);
+        check('La vista de conciliación v_deposits existe y es consultable con esta conexión',
+            vistaDefinida?.n === 1 && Number.isInteger(vista?.n) && vista.n >= 0,
+            JSON.stringify({ definida: vistaDefinida?.n, filas_visibles: vista?.n }));
 
         const indices = await client.query(
             `SELECT indexname FROM pg_indexes
@@ -109,6 +133,14 @@ async function main() {
                       RETURNING id
                   )
              SELECT id FROM existente UNION ALL SELECT id FROM nuevo`,
+            [stamp]
+        );
+        // Desde la migración 017 quien registra un depósito NO puede validarlo,
+        // así que esta suite necesita un segundo usuario para la validación.
+        const { rows: [revisor] } = await client.query(
+            `INSERT INTO users (username, full_name, password_hash, role)
+             VALUES ('prueba_b4_rev_' || $1, 'REVISOR PRUEBA BLOQUE 4', 'x', 'admin')
+             RETURNING id`,
             [stamp]
         );
         const { rows: [customer] } = await client.query(
@@ -225,10 +257,34 @@ async function main() {
             documental.status === 'aplicado' && documental.voucher_status === 'PENDIENTE_DE_BOLETA',
             JSON.stringify(documental));
 
-        const { rows: [historicos] } = await client.query(
-            `SELECT COUNT(*)::int AS n FROM payments WHERE voucher_status IS NOT NULL AND id <> $1`, [tercero]);
-        check('Los pagos anteriores NO se reinterpretan: siguen con voucher_status NULL',
-            historicos.n === 0, `${historicos.n} pagos con estado documental asignado`);
+        // REGLA PG4: los pagos anteriores al bloque 4 conservan voucher_status
+        // NULL ("anterior al control documental"). La columna nace sin DEFAULT
+        // justamente para eso.
+        //
+        // Contar TODOS los pagos de la base con estado documental no comprueba
+        // esa regla: desde 4.1 la API se lo asigna a cada pago nuevo, que es el
+        // comportamiento correcto. Hay que distinguir por FECHA, y el corte
+        // exacto es el momento en que se aplicó la migración 013 en ESTA base.
+        const { rows: [propios] } = await client.query(
+            `SELECT COUNT(*)::int AS n FROM payments
+              WHERE sale_id = $1 AND voucher_status IS NOT NULL AND id <> $2`,
+            [sale.id, tercero]);
+        check('Un pago nacido por SQL no recibe estado documental: solo lo tiene al que se lo pusimos',
+            propios.n === 0, `${propios.n} pagos de la venta de prueba con estado documental`);
+
+        const { rows: [previos] } = await client.query(
+            `WITH corte AS (
+                 SELECT applied_at FROM schema_migrations WHERE filename = '013_payments_foundation.sql'
+             )
+             SELECT (SELECT applied_at FROM corte) AS corte,
+                    (SELECT COUNT(*)::int FROM payments p, corte
+                      WHERE p.voucher_status IS NOT NULL
+                        AND p.created_at < corte.applied_at) AS n`);
+        check('Los pagos ANTERIORES al bloque 4 no se reinterpretan: siguen con voucher_status NULL',
+            previos.corte !== null && previos.n === 0,
+            previos.corte === null
+                ? 'no está registrada la migración 013 en schema_migrations'
+                : `${previos.n} pagos anteriores al ${previos.corte} con estado documental`);
 
         await client.query(
             `INSERT INTO payment_voucher_events (payment_id, from_status, to_status, action, actor_id, comment)
@@ -315,9 +371,15 @@ async function main() {
         check('No se puede validar sin dejar quién validó y cuándo',
             validarSinUsuario?.code === '23514', validarSinUsuario?.message);
 
-        await client.query(
+        const autovalidar = await fails(client,
             `UPDATE deposits SET status = 'VALIDADO', validated_by = $2, validated_at = now() WHERE id = $1`,
             [deposito.id, user.id]);
+        check('Quien registra un depósito no puede validarlo (separación de funciones)',
+            autovalidar?.code === '23514', autovalidar?.message);
+
+        await client.query(
+            `UPDATE deposits SET status = 'VALIDADO', validated_by = $2, validated_at = now() WHERE id = $1`,
+            [deposito.id, revisor.id]);
         const volverAtras = await fails(client,
             `UPDATE deposits SET status = 'REVISADO', validated_by = NULL, validated_at = NULL WHERE id = $1`,
             [deposito.id]);
@@ -345,7 +407,8 @@ async function main() {
         console.log('\n[7] Recibo inmutable (estructura preparada, sin generador)');
 
         const { rows: [vacia] } = await client.query('SELECT COUNT(*)::int AS n FROM payment_receipts');
-        check('La tabla de recibos existe y está vacía: 4.0 no emite recibos', vacia.n === 0);
+        check('La tabla de recibos sigue sin recibos emitidos por la aplicación: 4.0 no los emite',
+            vacia.n === antes.recibos, `${vacia.n} recibos (había ${antes.recibos} al empezar)`);
 
         await client.query(
             `INSERT INTO payment_receipts
@@ -369,12 +432,18 @@ async function main() {
 
         // ------------------------------------------------ 9. SIN EFECTOS
         await client.query('ROLLBACK');
-        const { rows: [limpio] } = await pool.query(
-            `SELECT (SELECT COUNT(*) FROM deposits)::int AS depositos,
-                    (SELECT COUNT(*) FROM payment_receipts)::int AS recibos`);
+        const { rows: [despues] } = await pool.query(
+            `SELECT (SELECT COUNT(*) FROM deposits)::int         AS depositos,
+                    (SELECT COUNT(*) FROM deposit_payments)::int  AS depositos_pagos,
+                    (SELECT COUNT(*) FROM deposit_events)::int    AS depositos_eventos,
+                    (SELECT COUNT(*) FROM payment_receipts)::int  AS recibos,
+                    (SELECT COUNT(*) FROM payments)::int          AS pagos,
+                    (SELECT COUNT(*) FROM sales)::int             AS ventas,
+                    (SELECT COUNT(*) FROM customers)::int         AS clientes`);
         console.log('\n[8] La prueba no deja rastro');
-        check('Nada de lo anterior quedó guardado: la prueba no altera datos',
-            limpio.depositos === 0 && limpio.recibos === 0, JSON.stringify(limpio));
+        const igual = Object.keys(antes).every((k) => antes[k] === despues[k]);
+        check('Nada de lo anterior quedó guardado: la prueba deja la base exactamente como estaba',
+            igual, `antes ${JSON.stringify(antes)} / después ${JSON.stringify(despues)}`);
     } catch (error) {
         await client.query('ROLLBACK').catch(() => {});
         throw error;

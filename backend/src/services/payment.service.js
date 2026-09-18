@@ -413,13 +413,14 @@ export async function voidPayment(id, reason, actor) {
         const deposit = await Payment.depositOf(client, id);
         if (deposit) {
             await client.query(
-                `INSERT INTO deposit_events (deposit_id, event, from_status, to_status, actor_id, comment)
-                 VALUES ($1, 'OBSERVADO', $2, $2, $3, $4)`,
+                `INSERT INTO deposit_events (deposit_id, event, from_status, to_status, actor_id, comment, payment_id)
+                 VALUES ($1, 'OBSERVADO', $2, $2, $3, $4, $5)`,
                 [
                     deposit.id,
                     deposit.status,
                     actor?.id ?? null,
                     `Se anuló el pago P-${String(id).padStart(6, '0')} incluido en este depósito: ${reason}`,
+                    Number(id),
                 ]
             );
         }
