@@ -28,6 +28,8 @@
         "test:receipts": "node src/scripts/receipts-test.js",
         "test:collections": "node src/scripts/collections-test.js",
         "test:concurrency": "node src/scripts/concurrency-test.js",
+        "test:n8n-collections": "node src/scripts/n8n-collections-test.js",
+        "test:suppliers": "node src/scripts/suppliers-test.js",
     "n8n:receiver": "node src/scripts/n8n-receiver.js",
     "test:n8n": "node src/scripts/n8n-test.js"
   },
