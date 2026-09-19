@@ -5,6 +5,7 @@ import { useDebounce } from '../hooks/useDebounce.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { Badge, EmptyState, Field, Modal, Pagination, SearchInput, Spinner } from '../components/ui.jsx';
 import { formatDate } from '../utils/format.js';
+import GoogleAddressPicker from '../components/GoogleAddressPicker.jsx';
 
 const EMPTY = {
     dpi: '',
@@ -17,6 +18,8 @@ const EMPTY = {
     municipality: '',
     department: '',
     notes: '',
+    latitude: null,
+    longitude: null,
 };
 
 export default function Customers() {
@@ -30,11 +33,27 @@ export default function Customers() {
 
     const load = useCallback(async () => {
         setState((s) => ({ ...s, loading: true }));
+
         try {
-            const res = await customersApi.list({ search: debounced, status, page, pageSize: 15 });
-            setState({ loading: false, rows: res.data, pagination: res.pagination });
+            const res = await customersApi.list({
+                search: debounced,
+                status,
+                page,
+                pageSize: 15,
+            });
+
+            setState({
+                loading: false,
+                rows: res.data,
+                pagination: res.pagination,
+            });
         } catch (e) {
-            setState({ loading: false, rows: [], pagination: null });
+            setState({
+                loading: false,
+                rows: [],
+                pagination: null,
+            });
+
             toast.error(e.message);
         }
     }, [debounced, status, page, toast]);
@@ -42,6 +61,7 @@ export default function Customers() {
     useEffect(() => {
         load();
     }, [load]);
+
     useEffect(() => {
         setPage(1);
     }, [debounced, status]);
@@ -49,7 +69,13 @@ export default function Customers() {
     async function toggleActive(customer) {
         try {
             await customersApi.setActive(customer.id, !customer.is_active);
-            toast.success(customer.is_active ? 'Cliente desactivado' : 'Cliente activado');
+
+            toast.success(
+                customer.is_active
+                    ? 'Cliente desactivado'
+                    : 'Cliente activado'
+            );
+
             load();
         } catch (e) {
             toast.error(e.fullMessage);
@@ -61,16 +87,36 @@ export default function Customers() {
             <div className="page__head">
                 <div>
                     <h1>Clientes</h1>
-                    <p className="page__sub">Busca por nombre, DPI o teléfono</p>
+                    <p className="page__sub">
+                        Busca por nombre, DPI o teléfono
+                    </p>
                 </div>
-                <button className="btn btn--primary" onClick={() => setModal({ mode: 'create', data: EMPTY })}>
+
+                <button
+                    className="btn btn--primary"
+                    onClick={() =>
+                        setModal({
+                            mode: 'create',
+                            data: EMPTY,
+                        })
+                    }
+                >
                     Nuevo cliente
                 </button>
             </div>
 
             <div className="toolbar">
-                <SearchInput value={search} onChange={setSearch} placeholder="Nombre, DPI o teléfono…" />
-                <select className="input input--select" value={status} onChange={(e) => setStatus(e.target.value)}>
+                <SearchInput
+                    value={search}
+                    onChange={setSearch}
+                    placeholder="Nombre, DPI o teléfono…"
+                />
+
+                <select
+                    className="input input--select"
+                    value={status}
+                    onChange={(e) => setStatus(e.target.value)}
+                >
                     <option value="active">Activos</option>
                     <option value="inactive">Inactivos</option>
                     <option value="all">Todos</option>
@@ -82,7 +128,11 @@ export default function Customers() {
             ) : state.rows.length === 0 ? (
                 <EmptyState
                     title="No hay clientes que coincidan"
-                    hint={search ? 'Prueba con otro término de búsqueda.' : 'Registra el primer cliente para empezar.'}
+                    hint={
+                        search
+                            ? 'Prueba con otro término de búsqueda.'
+                            : 'Registra el primer cliente para empezar.'
+                    }
                 />
             ) : (
                 <div className="table-wrap">
@@ -98,34 +148,66 @@ export default function Customers() {
                                 <th className="right">Acciones</th>
                             </tr>
                         </thead>
+
                         <tbody>
                             {state.rows.map((c) => (
                                 <tr key={c.id}>
                                     <td className="mono">{c.dpi}</td>
+
                                     <td>
-                                        <Link to={`/clientes/${c.id}`} className="link">
+                                        <Link
+                                            to={`/clientes/${c.id}`}
+                                            className="link"
+                                        >
                                             {c.full_name}
                                         </Link>
                                     </td>
+
                                     <td className="mono">{c.phone}</td>
-                                    <td className="truncate" title={c.address}>
+
+                                    <td
+                                        className="truncate"
+                                        title={c.address}
+                                    >
                                         {c.address}
                                     </td>
+
                                     <td>{formatDate(c.created_at)}</td>
+
                                     <td>
-                                        <Badge status={c.is_active ? 'pagada' : 'anulada'}>
-                                            {c.is_active ? 'Activo' : 'Inactivo'}
+                                        <Badge
+                                            status={
+                                                c.is_active
+                                                    ? 'pagada'
+                                                    : 'anulada'
+                                            }
+                                        >
+                                            {c.is_active
+                                                ? 'Activo'
+                                                : 'Inactivo'}
                                         </Badge>
                                     </td>
+
                                     <td className="right nowrap">
                                         <button
                                             className="btn btn--ghost btn--sm"
-                                            onClick={() => setModal({ mode: 'edit', data: c })}
+                                            onClick={() =>
+                                                setModal({
+                                                    mode: 'edit',
+                                                    data: c,
+                                                })
+                                            }
                                         >
                                             Editar
                                         </button>
-                                        <button className="btn btn--ghost btn--sm" onClick={() => toggleActive(c)}>
-                                            {c.is_active ? 'Desactivar' : 'Activar'}
+
+                                        <button
+                                            className="btn btn--ghost btn--sm"
+                                            onClick={() => toggleActive(c)}
+                                        >
+                                            {c.is_active
+                                                ? 'Desactivar'
+                                                : 'Activar'}
                                         </button>
                                     </td>
                                 </tr>
@@ -135,7 +217,10 @@ export default function Customers() {
                 </div>
             )}
 
-            <Pagination pagination={state.pagination} onChange={setPage} />
+            <Pagination
+                pagination={state.pagination}
+                onChange={setPage}
+            />
 
             {modal && (
                 <CustomerModal
@@ -154,16 +239,46 @@ export default function Customers() {
 
 function CustomerModal({ mode, initial, onClose, onSaved }) {
     const toast = useToast();
-    const [form, setForm] = useState({ ...EMPTY, ...initial });
+
+    const [form, setForm] = useState({
+        ...EMPTY,
+        ...initial,
+    });
+
     const [errors, setErrors] = useState({});
     const [busy, setBusy] = useState(false);
 
-    const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+    const set = (key) => (e) => {
+        setForm((current) => ({
+            ...current,
+            [key]: e.target.value,
+        }));
+    };
+
+    function handleLocationSelect(location) {
+        setForm((current) => ({
+            ...current,
+            address: location.address || current.address,
+            municipality:
+                location.municipality || current.municipality,
+            department:
+                location.department || current.department,
+            latitude: location.latitude,
+            longitude: location.longitude,
+        }));
+
+        setErrors((current) => ({
+            ...current,
+            address: undefined,
+        }));
+    }
 
     async function submit(e) {
         e.preventDefault();
+
         setBusy(true);
         setErrors({});
+
         try {
             const payload = {
                 dpi: form.dpi,
@@ -176,7 +291,10 @@ function CustomerModal({ mode, initial, onClose, onSaved }) {
                 municipality: form.municipality || '',
                 department: form.department || '',
                 notes: form.notes || '',
+                latitude: form.latitude,
+                longitude: form.longitude,
             };
+
             if (mode === 'create') {
                 await customersApi.create(payload);
                 toast.success('Cliente registrado');
@@ -184,9 +302,10 @@ function CustomerModal({ mode, initial, onClose, onSaved }) {
                 await customersApi.update(initial.id, payload);
                 toast.success('Cliente actualizado');
             }
+
             onSaved();
         } catch (err) {
-            setErrors(err.fieldErrors);
+            setErrors(err.fieldErrors || {});
             toast.error(err.message);
         } finally {
             setBusy(false);
@@ -194,45 +313,173 @@ function CustomerModal({ mode, initial, onClose, onSaved }) {
     }
 
     return (
-        <Modal open title={mode === 'create' ? 'Nuevo cliente' : 'Editar cliente'} onClose={onClose} wide>
+        <Modal
+            open
+            title={
+                mode === 'create'
+                    ? 'Nuevo cliente'
+                    : 'Editar cliente'
+            }
+            onClose={onClose}
+            wide
+        >
             <form onSubmit={submit} className="form-grid">
-                <Field label="DPI" required error={errors.dpi} hint="13 dígitos" className="span-1">
-                    <input className="input mono" autoFocus inputMode="numeric" maxLength={15} value={form.dpi} onChange={set('dpi')} />
+                <Field
+                    label="DPI"
+                    required
+                    error={errors.dpi}
+                    hint="13 dígitos"
+                    className="span-1"
+                >
+                    <input
+                        className="input mono"
+                        autoFocus
+                        inputMode="numeric"
+                        maxLength={15}
+                        value={form.dpi}
+                        onChange={set('dpi')}
+                    />
                 </Field>
-                <Field label="Nombre completo" required error={errors.full_name} className="span-2">
-                    <input className="input" value={form.full_name} onChange={set('full_name')} />
+
+                <Field
+                    label="Nombre completo"
+                    required
+                    error={errors.full_name}
+                    className="span-2"
+                >
+                    <input
+                        className="input"
+                        value={form.full_name}
+                        onChange={set('full_name')}
+                    />
                 </Field>
-                <Field label="Teléfono" required error={errors.phone} hint="8 dígitos" className="span-1">
-                    <input className="input mono" inputMode="tel" value={form.phone} onChange={set('phone')} />
+
+                <Field
+                    label="Teléfono"
+                    required
+                    error={errors.phone}
+                    hint="8 dígitos"
+                    className="span-1"
+                >
+                    <input
+                        className="input mono"
+                        inputMode="tel"
+                        value={form.phone}
+                        onChange={set('phone')}
+                    />
                 </Field>
-                <Field label="Teléfono alterno" error={errors.phone_alt} className="span-1">
-                    <input className="input mono" inputMode="tel" value={form.phone_alt ?? ''} onChange={set('phone_alt')} />
+
+                <Field
+                    label="Teléfono alterno"
+                    error={errors.phone_alt}
+                    className="span-1"
+                >
+                    <input
+                        className="input mono"
+                        inputMode="tel"
+                        value={form.phone_alt ?? ''}
+                        onChange={set('phone_alt')}
+                    />
                 </Field>
-                <Field label="Correo electrónico" error={errors.email} className="span-1">
-                    <input className="input" type="email" value={form.email ?? ''} onChange={set('email')} />
+
+                <Field
+                    label="Correo electrónico"
+                    error={errors.email}
+                    className="span-1"
+                >
+                    <input
+                        className="input"
+                        type="email"
+                        value={form.email ?? ''}
+                        onChange={set('email')}
+                    />
                 </Field>
-                <Field label="Dirección" required error={errors.address} className="span-3">
-                    <input className="input" value={form.address} onChange={set('address')} />
+
+                <Field
+                    label="Dirección"
+                    required
+                    error={errors.address}
+                    className="span-3"
+                >
+                    <input
+                        className="input"
+                        value={form.address}
+                        onChange={set('address')}
+                    />
                 </Field>
-                <Field label="Municipio" error={errors.municipality} className="span-1">
-                    <input className="input" value={form.municipality ?? ''} onChange={set('municipality')} />
+
+                <GoogleAddressPicker
+                    address={form.address}
+                    latitude={form.latitude}
+                    longitude={form.longitude}
+                    onSelect={handleLocationSelect}
+                />
+
+                <Field
+                    label="Municipio"
+                    error={errors.municipality}
+                    className="span-1"
+                >
+                    <input
+                        className="input"
+                        value={form.municipality ?? ''}
+                        onChange={set('municipality')}
+                    />
                 </Field>
-                <Field label="Departamento" error={errors.department} className="span-1">
-                    <input className="input" value={form.department ?? ''} onChange={set('department')} />
+
+                <Field
+                    label="Departamento"
+                    error={errors.department}
+                    className="span-1"
+                >
+                    <input
+                        className="input"
+                        value={form.department ?? ''}
+                        onChange={set('department')}
+                    />
                 </Field>
-                <Field label="Punto de referencia" error={errors.address_ref} className="span-3">
-                    <input className="input" value={form.address_ref ?? ''} onChange={set('address_ref')} />
+
+                <Field
+                    label="Punto de referencia"
+                    error={errors.address_ref}
+                    className="span-3"
+                >
+                    <input
+                        className="input"
+                        value={form.address_ref ?? ''}
+                        onChange={set('address_ref')}
+                    />
                 </Field>
-                <Field label="Observaciones" error={errors.notes} className="span-3">
-                    <textarea className="input" rows={2} value={form.notes ?? ''} onChange={set('notes')} />
+
+                <Field
+                    label="Observaciones"
+                    error={errors.notes}
+                    className="span-3"
+                >
+                    <textarea
+                        className="input"
+                        rows={2}
+                        value={form.notes ?? ''}
+                        onChange={set('notes')}
+                    />
                 </Field>
 
                 <div className="form-actions span-3">
-                    <button type="button" className="btn btn--ghost" onClick={onClose}>
+                    <button
+                        type="button"
+                        className="btn btn--ghost"
+                        onClick={onClose}
+                    >
                         Cancelar
                     </button>
-                    <button className="btn btn--primary" disabled={busy}>
-                        {busy ? 'Guardando…' : 'Guardar cliente'}
+
+                    <button
+                        className="btn btn--primary"
+                        disabled={busy}
+                    >
+                        {busy
+                            ? 'Guardando…'
+                            : 'Guardar cliente'}
                     </button>
                 </div>
             </form>
